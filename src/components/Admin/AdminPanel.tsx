@@ -331,6 +331,16 @@ export const AdminPanel: React.FC = () => {
 
   useEffect(() => {
     refreshData();
+    const interval = setInterval(refreshData, 3000);
+    const handleStorage = () => refreshData();
+    window.addEventListener('storage', handleStorage);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') refreshData();
+    });
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('storage', handleStorage);
+    };
   }, [refreshData]);
 
   const handleCreateHost = async (e: React.FormEvent) => {
@@ -732,18 +742,33 @@ export const AdminPanel: React.FC = () => {
                             </td>
                             <td>{s.hostName}</td>
                             <td style={{ color: 'var(--accent-amber)' }}>{s.guestName}</td>
-                            <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)', fontWeight: 700 }}>
-                              {formatDuration(s.durationSeconds)}
+                            <td style={{ minWidth: '110px' }}>
+                              <div style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '5px',
+                                fontFamily: 'var(--font-mono)',
+                                color: 'var(--accent-cyan)',
+                                fontWeight: 700,
+                                background: 'rgba(0, 240, 255, 0.08)',
+                                border: '1px solid rgba(0, 240, 255, 0.25)',
+                                padding: '3px 8px',
+                                borderRadius: '6px',
+                                fontSize: '0.75rem',
+                              }}>
+                                <Clock size={12} color="var(--accent-cyan)" />
+                                <span>{formatDuration(s.durationSeconds)}</span>
+                              </div>
                             </td>
                             <td>
                               {uploadingSessionId === s.id ? (
-                                <div style={{ minWidth: '110px' }}>
+                                <div style={{ minWidth: '130px' }}>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.68rem', color: 'var(--accent-cyan)' }}>
                                     <Loader2 size={11} className="animate-spin" />
-                                    <span>{uploadProgressMap[s.id]?.progress || 0}%</span>
+                                    <span>Uploading to Drive: {uploadProgressMap[s.id]?.progress || 0}%</span>
                                   </div>
-                                  <div style={{ width: '100%', height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', marginTop: '3px' }}>
-                                    <div style={{ width: `${uploadProgressMap[s.id]?.progress || 0}%`, height: '100%', background: 'var(--accent-cyan)', borderRadius: '2px' }} />
+                                  <div style={{ width: '100%', height: '5px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', marginTop: '3px' }}>
+                                    <div style={{ width: `${uploadProgressMap[s.id]?.progress || 0}%`, height: '100%', background: 'var(--accent-cyan)', borderRadius: '3px', transition: 'width 0.3s' }} />
                                   </div>
                                 </div>
                               ) : s.driveFileUrl ? (
@@ -753,29 +778,41 @@ export const AdminPanel: React.FC = () => {
                                   rel="noreferrer"
                                   className="btn-transport"
                                   style={{
-                                    padding: '3px 8px',
+                                    padding: '4px 10px',
                                     height: 'auto',
-                                    fontSize: '0.68rem',
-                                    background: 'rgba(0, 255, 135, 0.1)',
+                                    fontSize: '0.72rem',
+                                    fontWeight: 600,
+                                    background: 'rgba(0, 255, 135, 0.12)',
                                     color: 'var(--accent-green)',
-                                    borderColor: 'rgba(0, 255, 135, 0.3)',
+                                    borderColor: 'rgba(0, 255, 135, 0.4)',
                                     textDecoration: 'none',
                                     display: 'inline-flex',
                                     alignItems: 'center',
-                                    gap: '4px'
+                                    gap: '5px',
+                                    borderRadius: '6px',
                                   }}
-                                  title="Recorded audio uploaded to Google Drive. Click to open."
+                                  title="Recorded audio uploaded to Google Drive. Click to open file in Drive."
                                 >
-                                  <CheckCircle size={11} /> In Drive <ExternalLink size={9} />
+                                  <CheckCircle size={13} /> Uploaded to Drive <ExternalLink size={10} />
                                 </a>
                               ) : (
                                 <button
                                   className="btn-transport"
-                                  style={{ padding: '3px 8px', height: 'auto', fontSize: '0.68rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                  style={{
+                                    padding: '4px 10px',
+                                    height: 'auto',
+                                    fontSize: '0.72rem',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '5px',
+                                    borderColor: 'rgba(255, 183, 0, 0.35)',
+                                    color: 'var(--accent-amber)',
+                                    background: 'rgba(255, 183, 0, 0.08)',
+                                  }}
                                   onClick={() => handleUploadSessionToDrive(s)}
-                                  title="Upload audio to Google Drive"
+                                  title="Upload this session audio to Google Drive folder"
                                 >
-                                  <CloudUpload size={11} /> Upload
+                                  <CloudUpload size={13} /> Upload to Drive
                                 </button>
                               )}
                             </td>
@@ -783,7 +820,12 @@ export const AdminPanel: React.FC = () => {
                               {new Date(s.createdAt).toLocaleString()}
                             </td>
                             <td style={{ fontSize: '0.7rem' }}>
-                              <span className="daw-badge">{s.format}</span>
+                              <span className="daw-badge" style={{ display: 'inline-block' }}>{s.format}</span>
+                              {s.fileSizeMb ? (
+                                <span style={{ marginLeft: '6px', color: 'var(--text-muted)', fontSize: '0.68rem', fontFamily: 'var(--font-mono)' }}>
+                                  ({s.fileSizeMb} MB)
+                                </span>
+                              ) : null}
                             </td>
                             <td>
                               <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>

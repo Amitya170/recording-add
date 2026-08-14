@@ -374,6 +374,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       compiled = bA;
     } else if (bB) {
       compiled = bB;
+    } else if (engineA.current?.audioContext) {
+      const dur = Math.max(1, finalDurationSeconds);
+      compiled = engineA.current.audioContext.createBuffer(2, dur * 44100, 44100);
     }
 
     sttEngine.current?.stop();
@@ -389,7 +392,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         hostEmail: currentUser?.email || 'host@studio.local',
         guestName: guestDisplayNameRef.current,
         title: `Podcast Session ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
-        durationSeconds: finalDurationSeconds || Math.round(compiled.duration),
+        durationSeconds: finalDurationSeconds || Math.round(compiled.duration) || 1,
         channelCount: compiled.numberOfChannels,
         format: 'WAV 32-bit Float',
       });
@@ -772,6 +775,75 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
             </button>
           )}
         </div>
+
+        {/* Google Drive Live Upload Progress & Status Banner */}
+        {driveUpload && (
+          <div style={{
+            background: driveUpload.error ? 'rgba(255, 42, 95, 0.12)' : driveUpload.progress === 100 ? 'rgba(0, 255, 135, 0.12)' : 'rgba(0, 240, 255, 0.12)',
+            border: `1px solid ${driveUpload.error ? 'rgba(255, 42, 95, 0.5)' : driveUpload.progress === 100 ? 'rgba(0, 255, 135, 0.5)' : 'rgba(0, 240, 255, 0.5)'}`,
+            borderRadius: '8px',
+            padding: '10px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            fontSize: '0.82rem',
+            fontWeight: 600,
+            color: driveUpload.error ? 'var(--accent-red)' : driveUpload.progress === 100 ? 'var(--accent-green)' : 'var(--accent-cyan)',
+            boxShadow: driveUpload.progress === 100 ? '0 0 15px rgba(0, 255, 135, 0.2)' : '0 0 15px rgba(0, 240, 255, 0.2)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1 }}>
+              {driveUpload.isUploading ? (
+                <Loader2 size={18} className="animate-spin" />
+              ) : driveUpload.progress === 100 ? (
+                <CheckCircle size={18} color="var(--accent-green)" />
+              ) : (
+                <AlertCircle size={18} color="var(--accent-red)" />
+              )}
+              <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span>{driveUpload.stageText}</span>
+                  {driveUpload.isUploading && <span>{driveUpload.progress}%</span>}
+                </div>
+                {driveUpload.isUploading && (
+                  <div style={{ width: '100%', height: '5px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', marginTop: '6px', overflow: 'hidden' }}>
+                    <div style={{ width: `${driveUpload.progress}%`, height: '100%', background: 'var(--accent-cyan)', transition: 'width 0.3s ease' }} />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {driveUpload.fileUrl && (
+              <a
+                href={driveUpload.fileUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="btn-transport"
+                style={{
+                  background: 'rgba(0, 255, 135, 0.15)',
+                  borderColor: 'rgba(0, 255, 135, 0.4)',
+                  color: 'var(--accent-green)',
+                  padding: '4px 12px',
+                  height: 'auto',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  textDecoration: 'none'
+                }}
+              >
+                <ExternalLink size={13} /> Open in Google Drive
+              </a>
+            )}
+
+            <button
+              onClick={() => setDriveUpload(null)}
+              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '2px' }}
+              title="Dismiss"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
 
         {/* Dual-Channel Speaker Consoles (Host & Guest side-by-side) */}
         <section className="podcast-speakers" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
