@@ -131,6 +131,21 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
   const [driveWebhookInput, setDriveWebhookInput] = useState(getGoogleDriveWebhookUrl());
   const [copiedScript, setCopiedScript] = useState(false);
   const [saveWebhookSuccess, setSaveWebhookSuccess] = useState(false);
+  const [isWebhookConfigured, setIsWebhookConfigured] = useState(Boolean(getGoogleDriveWebhookUrl()));
+
+  useEffect(() => {
+    const checkWebhook = () => {
+      const url = getGoogleDriveWebhookUrl();
+      setIsWebhookConfigured(Boolean(url));
+      setDriveWebhookInput(url);
+    };
+    window.addEventListener('storage', checkWebhook);
+    const interval = setInterval(checkWebhook, 2000);
+    return () => {
+      window.removeEventListener('storage', checkWebhook);
+      clearInterval(interval);
+    };
+  }, []);
 
   // WebRTC P2P & FX Rack State
   const [webrtcStatus, setWebrtcStatus] = useState<WebRTCStatus>({
@@ -1072,13 +1087,35 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <CloudUpload size={18} color="var(--accent-cyan)" />
+              <CloudUpload size={18} color={isWebhookConfigured ? 'var(--accent-green)' : 'var(--accent-amber)'} />
               <div>
-                <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.5px' }}>
-                  GOOGLE DRIVE CLOUD STORAGE SYNC
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.5px' }}>
+                    GOOGLE DRIVE CLOUD STORAGE SYNC
+                  </span>
+                  <span
+                    style={{
+                      fontSize: '0.65rem',
+                      fontFamily: 'var(--font-mono)',
+                      fontWeight: 700,
+                      padding: '1px 6px',
+                      borderRadius: '4px',
+                      background: isWebhookConfigured ? 'rgba(0, 255, 135, 0.15)' : 'rgba(255, 183, 0, 0.15)',
+                      color: isWebhookConfigured ? 'var(--accent-green)' : 'var(--accent-amber)',
+                      border: isWebhookConfigured ? '1px solid rgba(0, 255, 135, 0.3)' : '1px solid rgba(255, 183, 0, 0.3)',
+                    }}
+                  >
+                    {isWebhookConfigured ? '• CONFIGURED' : '• NOT CONFIGURED'}
+                  </span>
                 </div>
-                <div style={{ fontSize: '0.7rem', color: driveUpload?.error ? 'var(--accent-red)' : driveUpload?.progress === 100 ? 'var(--accent-green)' : 'var(--text-secondary)' }}>
-                  {driveUpload?.stageText || (driveUpload?.progress === 100 ? '✓ Synced to Google Drive' : 'Ready to upload recorded master audio')}
+                <div style={{ fontSize: '0.7rem', color: driveUpload?.isUploading ? 'var(--accent-cyan)' : driveUpload?.progress === 100 ? 'var(--accent-green)' : isWebhookConfigured ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                  {driveUpload?.isUploading
+                    ? driveUpload.stageText
+                    : driveUpload?.progress === 100
+                    ? '✓ Audio uploaded to Google Drive folder'
+                    : isWebhookConfigured
+                    ? '✓ Google Drive Webhook Connected • Auto-sync active'
+                    : 'Google Drive Webhook URL not configured. Click "⚙️ Webhook Setup" to connect.'}
                 </div>
               </div>
             </div>
