@@ -68,12 +68,7 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
         // Transmit Guest microphone stream over WebRTC to Host
         const stream = (engineGuest.current as any).stream as MediaStream | undefined;
         if (stream && webrtcEngine.current) {
-          const audioTrack = stream.getAudioTracks()[0];
-          if (audioTrack) {
-            await webrtcEngine.current.replaceLocalTrack(audioTrack);
-          } else {
-            webrtcEngine.current.setLocalStream(stream);
-          }
+          await webrtcEngine.current.setLocalStream(stream);
         }
       } catch (err) {
         console.warn('Guest device change failed:', err);
@@ -122,7 +117,9 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
       // Play incoming Host audio to Guest's headphones/speakers
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
-        remoteAudioRef.current.play().catch((e) => console.warn('Autoplay prevented:', e));
+        remoteAudioRef.current.volume = 1.0;
+        remoteAudioRef.current.muted = false;
+        remoteAudioRef.current.play().catch((e) => console.warn('Guest autoplay prevented:', e));
       }
     };
     webrtcEngine.current = rEngine;

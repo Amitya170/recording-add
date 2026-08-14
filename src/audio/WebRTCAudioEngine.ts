@@ -1,7 +1,7 @@
 /**
  * WebRTCAudioEngine — Real-Time Peer-to-Peer Audio Connection Engine.
  * Manages RTCPeerConnection for low-latency, dual-mono audio streaming
- * between remote Host and Guest speakers.
+ * between remote Host and Guest speakers with automatic signaling and candidate queuing.
  */
 
 export interface WebRTCStatus {
@@ -15,18 +15,22 @@ export class WebRTCAudioEngine {
   private peerConnection: RTCPeerConnection | null = null;
   private channel: BroadcastChannel | null = null;
   private remoteStream: MediaStream | null = null;
+  private localStream: MediaStream | null = null;
+  private pendingCandidates: RTCIceCandidateInit[] = [];
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 
   public role: 'host' | 'guest';
   public onStatusChange?: (status: WebRTCStatus) => void;
   public onRemoteStream?: (stream: MediaStream) => void;
 
-  private isConnected: boolean = false;
+  public isConnected: boolean = false;
   private statusText: string = 'Idle';
 
   constructor(role: 'host' | 'guest', sessionToken: string = 'podcast_default_session') {
     this.role = role;
     this.channel = new BroadcastChannel(`webrtc_session_${sessionToken}`);
     this.initChannel();
+    this.startPresenceHeartbeat();
   }
 
   private updateStatus(text: string, connected: boolean = false) {
@@ -42,48 +46,83 @@ export class WebRTCAudioEngine {
     }
   }
 
+  private startPresenceHeartbeat() {
+    this.heartbeatInterval = setInterval(() => {
+      if (!this.isConnected && this.channel) {
+        if (this.role === 'guest') {
+          this.channel.postMessage({ type: 'JOIN_REQUEST', role: 'guest' });
+        } else {
+          this.channel.postMessage({ type: 'HOST_ONLINE', role: 'host' });
+        }
+      }
+    }, 1500);
+  }
+
   private initChannel() {
     if (!this.channel) return;
 
     this.channel.onmessage = async (event) => {
-      const { type, data } = event.data;
+      const { type, data } = event.data || {};
 
-      if (type === 'OFFER' && this.role === 'guest') {
+      if (type === 'HOST_ONLINE' && this.role === 'guest') {
+        if (!this.isConnected) {
+          this.channel?.postMessage({ type: 'JOIN_REQUEST', role: 'guest' });
+        }
+      } else if (type === 'JOIN_REQUEST' && this.role === 'host') {
+        // Guest joined, Host creates Offer if not already connecting
+        const pc = this.peerConnection || this.setupPeerConnection();
+        if (pc.signalingState === 'stable') {
+          await this.createOffer();
+        }
+      } else if (type === 'OFFER' && this.role === 'guest') {
         await this.handleOffer(data);
       } else if (type === 'ANSWER' && this.role === 'host') {
         await this.handleAnswer(data);
       } else if (type === 'ICE_CANDIDATE') {
-        if (this.peerConnection && data) {
-          try {
-            await this.peerConnection.addIceCandidate(new RTCIceCandidate(data));
-          } catch (e) {
-            console.error('Error adding ICE candidate:', e);
+        if (data) {
+          if (this.peerConnection && this.peerConnection.remoteDescription) {
+            try {
+              await this.peerConnection.addIceCandidate(new RTCIceCandidate(data));
+            } catch (e) {
+              console.warn('addIceCandidate error:', e);
+            }
+          } else {
+            this.pendingCandidates.push(data);
           }
         }
-      } else if (type === 'JOIN_REQUEST' && this.role === 'host') {
-        // Guest joined, Host creates Offer
-        this.createOffer();
       }
     };
 
     if (this.role === 'guest') {
       this.updateStatus('Connecting to Host...', false);
-      // Announce guest presence
       setTimeout(() => {
-        this.channel?.postMessage({ type: 'JOIN_REQUEST' });
-      }, 500);
+        this.channel?.postMessage({ type: 'JOIN_REQUEST', role: 'guest' });
+      }, 300);
     } else {
       this.updateStatus('Waiting for Remote Guest...', false);
+      setTimeout(() => {
+        this.channel?.postMessage({ type: 'HOST_ONLINE', role: 'host' });
+      }, 300);
     }
   }
 
   private setupPeerConnection(): RTCPeerConnection {
+    if (this.peerConnection) return this.peerConnection;
+
     const pc = new RTCPeerConnection({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
       ],
     });
+
+    // Ensure audio transceiver exists for bi-directional communication
+    try {
+      pc.addTransceiver('audio', { direction: 'sendrecv' });
+    } catch {
+      // Ignore if transceiver not supported in environment
+    }
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
@@ -95,12 +134,11 @@ export class WebRTCAudioEngine {
     };
 
     pc.ontrack = (event) => {
-      if (event.streams && event.streams[0]) {
-        this.remoteStream = event.streams[0];
-        this.updateStatus('Connected (WebRTC Audio Live)', true);
-        if (this.onRemoteStream) {
-          this.onRemoteStream(this.remoteStream);
-        }
+      const stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
+      this.remoteStream = stream;
+      this.updateStatus('Connected (WebRTC Audio Live)', true);
+      if (this.onRemoteStream) {
+        this.onRemoteStream(stream);
       }
     };
 
@@ -108,29 +146,50 @@ export class WebRTCAudioEngine {
       if (pc.connectionState === 'connected') {
         this.updateStatus('Connected (WebRTC Audio Live)', true);
       } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-        this.updateStatus('Disconnected', false);
+        this.updateStatus('Disconnected — Reconnecting...', false);
       }
     };
 
     this.peerConnection = pc;
+
+    // Attach local stream tracks if available
+    if (this.localStream) {
+      this.localStream.getTracks().forEach((track) => {
+        pc.addTrack(track, this.localStream!);
+      });
+    }
+
     return pc;
   }
 
-  public async setLocalStream(stream: MediaStream) {
-    if (!this.peerConnection) {
-      this.setupPeerConnection();
-    }
-
-    if (this.peerConnection && stream) {
-      const senders = this.peerConnection.getSenders();
-      stream.getTracks().forEach((track) => {
-        const existingSender = senders.find((s) => s.track && s.track.kind === track.kind);
-        if (existingSender) {
-          existingSender.replaceTrack(track).catch((e) => console.warn('replaceTrack error:', e));
-        } else {
-          this.peerConnection?.addTrack(track, stream);
+  private async flushPendingCandidates() {
+    if (!this.peerConnection || !this.peerConnection.remoteDescription) return;
+    while (this.pendingCandidates.length > 0) {
+      const candidate = this.pendingCandidates.shift();
+      if (candidate) {
+        try {
+          await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+          console.warn('Error flushing ICE candidate:', e);
         }
-      });
+      }
+    }
+  }
+
+  public async setLocalStream(stream: MediaStream) {
+    this.localStream = stream;
+    const pc = this.peerConnection || this.setupPeerConnection();
+
+    const audioTrack = stream.getAudioTracks()[0];
+    if (!audioTrack) return;
+
+    const senders = pc.getSenders();
+    const existingSender = senders.find((s) => s.track && s.track.kind === 'audio');
+
+    if (existingSender) {
+      await existingSender.replaceTrack(audioTrack);
+    } else {
+      pc.addTrack(audioTrack, stream);
     }
   }
 
@@ -140,15 +199,17 @@ export class WebRTCAudioEngine {
     const sender = senders.find((s) => s.track && s.track.kind === 'audio');
     if (sender) {
       await sender.replaceTrack(newTrack);
-    } else {
-      this.peerConnection.addTrack(newTrack);
+    } else if (this.localStream) {
+      this.peerConnection.addTrack(newTrack, this.localStream);
     }
   }
 
   public async createOffer() {
     const pc = this.peerConnection || this.setupPeerConnection();
     try {
-      const offer = await pc.createOffer();
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: true,
+      });
       await pc.setLocalDescription(offer);
       this.channel?.postMessage({ type: 'OFFER', data: offer });
       this.updateStatus('Signaling Remote Guest...', false);
@@ -161,6 +222,8 @@ export class WebRTCAudioEngine {
     const pc = this.peerConnection || this.setupPeerConnection();
     try {
       await pc.setRemoteDescription(new RTCSessionDescription(offerSDP));
+      await this.flushPendingCandidates();
+
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       this.channel?.postMessage({ type: 'ANSWER', data: answer });
@@ -174,6 +237,7 @@ export class WebRTCAudioEngine {
     if (this.peerConnection) {
       try {
         await this.peerConnection.setRemoteDescription(new RTCSessionDescription(answerSDP));
+        await this.flushPendingCandidates();
         this.updateStatus('Connected (WebRTC Audio Live)', true);
       } catch (e) {
         console.error('Error handling WebRTC answer:', e);
@@ -182,6 +246,10 @@ export class WebRTCAudioEngine {
   }
 
   public dispose() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
     if (this.peerConnection) {
       this.peerConnection.close();
       this.peerConnection = null;
@@ -192,3 +260,4 @@ export class WebRTCAudioEngine {
     }
   }
 }
+

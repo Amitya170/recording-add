@@ -60,13 +60,14 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
   const [isMutedA, setIsMutedA] = useState(false);
   const [isMutedB, setIsMutedB] = useState(false);
   const [gainA, setGainA] = useState(1.0);
-  const [_gainB, _setGainB] = useState(1.0);
+  const [gainB, setGainB] = useState(1.0);
   const [soloA, setSoloA] = useState(false);
-  const [_soloB, setSoloB] = useState(false);
+  const [soloB, setSoloB] = useState(false);
   const [vocalPresetA, setVocalPresetA] = useState('warm');
+  const [vocalPresetB, setVocalPresetB] = useState('warm');
 
   const [analysisA, setAnalysisA] = useState<AnalysisData | null>(null);
-  const [_analysisB, setAnalysisB] = useState<AnalysisData | null>(null);
+  const [analysisB, setAnalysisB] = useState<AnalysisData | null>(null);
 
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -97,7 +98,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
   // AI Noise Suppression & Speech Transcripts & Recovery State
   const [isNoiseA, setIsNoiseA] = useState(true);
-  const [_isNoiseB, _setIsNoiseB] = useState(true);
+  const [isNoiseB, setIsNoiseB] = useState(true);
   const [transcriptItems, setTranscriptItems] = useState<TranscriptItem[]>([]);
   const [showTranscriptModal, setShowTranscriptModal] = useState(false);
   const [currentLanguage, setCurrentLanguage] = useState('en-US');
@@ -131,12 +132,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         // Transmit host mic stream over WebRTC to guest speaker
         const hostStream = (engineA.current as any).stream as MediaStream | undefined;
         if (hostStream && webrtcEngine.current) {
-          const audioTrack = hostStream.getAudioTracks()[0];
-          if (audioTrack) {
-            await webrtcEngine.current.replaceLocalTrack(audioTrack);
-          } else {
-            webrtcEngine.current.setLocalStream(hostStream);
-          }
+          await webrtcEngine.current.setLocalStream(hostStream);
         }
       } catch (err: any) {
         setIsConnectedA(false);
@@ -188,7 +184,12 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     // WebRTC Engine Init for Bi-Directional Call Audio
     const rRole = currentUser?.role === 'user' ? 'guest' : 'host';
     const rEngine = new WebRTCAudioEngine(rRole);
-    rEngine.onStatusChange = (st) => setWebrtcStatus(st);
+    rEngine.onStatusChange = (st) => {
+      setWebrtcStatus(st);
+      if (st.connected) {
+        setIsConnectedB(true);
+      }
+    };
     rEngine.onRemoteStream = (remoteStream) => {
       // Connect remote guest stream into engineB for waveform visualizer & recording
       if (engineB.current) {
@@ -198,6 +199,8 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       // Play remote guest voice live through host speakers/headphones
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
+        remoteAudioRef.current.volume = 1.0;
+        remoteAudioRef.current.muted = false;
         remoteAudioRef.current.play().catch((e) => console.warn('Autoplay error:', e));
       }
     };
@@ -455,9 +458,19 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     engineA.current?.setGain(val);
   };
 
+  const handleGainChangeB = (val: number) => {
+    setGainB(val);
+    engineB.current?.setGain(val);
+  };
+
   const handlePresetChangeA = (preset: string) => {
     setVocalPresetA(preset);
     engineA.current?.applyVocalPreset(preset);
+  };
+
+  const handlePresetChangeB = (preset: string) => {
+    setVocalPresetB(preset);
+    engineB.current?.applyVocalPreset(preset);
   };
 
   const handleToggleNoiseA = () => {
@@ -466,12 +479,27 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     engineA.current?.setNoiseSuppression(next);
   };
 
+  const handleToggleNoiseB = () => {
+    const next = !isNoiseB;
+    setIsNoiseB(next);
+    engineB.current?.setNoiseSuppression(next);
+  };
+
   const handleSoloA = () => {
     const next = !soloA;
     setSoloA(next);
     if (next) {
       setSoloB(false);
       if (!isMutedB) handleMuteB();
+    }
+  };
+
+  const handleSoloB = () => {
+    const next = !soloB;
+    setSoloB(next);
+    if (next) {
+      setSoloA(false);
+      if (!isMutedA) handleMuteA();
     }
   };
 
@@ -547,37 +575,36 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
       {/* Header */}
       <header className="daw-header">
-        <div className="daw-title-group">
-          <Radio size={22} className="daw-logo-icon" />
-          <h1 className="daw-title">PODCAST CRAFT STUDIO</h1>
+        <div className="daw-brand">
+          <div className="daw-logo-circle">
+            <Radio size={18} />
+          </div>
+          <span className="daw-brand-title">PODCAST CRAFT STUDIO</span>
           <span className="daw-badge">DUAL-CHANNEL DAW</span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          {/* Invite Guest Button for Host */}
+        {/* Global Connection & User Menu */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <button
             className="btn-transport btn-cyan"
             onClick={() => setShowInviteModal(true)}
-            style={{ height: '34px', padding: '0 14px' }}
+            style={{ height: '32px', padding: '0 12px', fontSize: '0.75rem' }}
           >
-            <UserPlus size={14} /> Invite Guest Speaker
+            <UserPlus size={13} /> Invite Guest Speaker
           </button>
 
-          <div className="header-status-pill">
-            <Activity size={13} color="var(--accent-cyan)" />
-            <span>P2P WEBRTC: {webrtcStatus.connected ? 'LIVE CONNECTED' : webrtcStatus.statusText.toUpperCase()}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+            <Activity size={14} color={isConnectedA ? 'var(--accent-green)' : 'var(--accent-red)'} />
+            <span>{isConnectedA ? 'Host Mic Ready' : 'Mic Offline'}</span>
           </div>
 
-          {/* User Profile Menu */}
           <div style={{ position: 'relative' }}>
             <button
-              className="btn-transport"
+              className="user-menu-btn"
               onClick={() => setShowUserMenu(!showUserMenu)}
-              style={{ gap: '8px', padding: '0 12px', height: '34px' }}
+              title="Account Menu"
             >
-              <div className="avatar-circle avatar-user" style={{ width: '22px', height: '22px', fontSize: '0.65rem' }}>
-                {hostDisplayName.charAt(0).toUpperCase()}
-              </div>
+              <div className="user-avatar">{hostDisplayName.charAt(0).toUpperCase()}</div>
               <span>{hostDisplayName}</span>
             </button>
 
@@ -585,8 +612,10 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
               <div className="user-menu-dropdown">
                 <div className="user-menu-info">
                   <div style={{ fontWeight: 600 }}>{hostDisplayName}</div>
-                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{currentUser?.email || 'Host Speaker'}</div>
-                  <span className="role-badge role-admin" style={{ marginTop: '4px' }}>HOST SPEAKER</span>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{currentUser?.email || 'host@studio.local'}</div>
+                  <span className={`role-badge ${isAdmin ? 'role-admin' : 'role-host'}`} style={{ marginTop: '4px' }}>
+                    {currentUser?.role?.toUpperCase() || 'HOST'}
+                  </span>
                 </div>
                 <button className="user-menu-item user-menu-danger" onClick={logout}>
                   <LogOut size={14} /> Sign Out
@@ -640,8 +669,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
           )}
         </div>
 
-        {/* Top: Host Microphone Console Panel */}
-        <section className="podcast-speakers" style={{ gridTemplateColumns: '1fr' }}>
+        {/* Dual-Channel Speaker Consoles (Host & Guest side-by-side) */}
+        <section className="podcast-speakers" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          {/* Speaker A (Host) */}
           <SpeakerPanel
             label="SPEAKER A (HOST)"
             role="host"
@@ -667,6 +697,34 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
             onToggleNoiseSuppression={handleToggleNoiseA}
             vocalPreset={vocalPresetA}
             onPresetChange={handlePresetChangeA}
+          />
+
+          {/* Speaker B (Guest) */}
+          <SpeakerPanel
+            label="SPEAKER B (GUEST)"
+            role="guest"
+            color="amber"
+            devices={[]}
+            selectedDeviceId=""
+            onDeviceChange={() => {}}
+            isMuted={isMutedB}
+            onToggleMute={handleMuteB}
+            gain={gainB}
+            onGainChange={handleGainChangeB}
+            isSolo={soloB}
+            onToggleSolo={handleSoloB}
+            analysisData={analysisB}
+            isRecording={isRecording}
+            isConnected={isConnectedB || webrtcStatus.connected}
+            userName={guestDisplayName}
+            onOpenFx={() => {
+              setActiveFxEngine(engineB.current);
+              setActiveFxLabel('Speaker B (Guest)');
+            }}
+            isNoiseSuppressed={isNoiseB}
+            onToggleNoiseSuppression={handleToggleNoiseB}
+            vocalPreset={vocalPresetB}
+            onPresetChange={handlePresetChangeB}
           />
         </section>
 
