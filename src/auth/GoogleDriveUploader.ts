@@ -8,28 +8,38 @@ const STORAGE_KEY_WEBHOOK = 'podcast_gdrive_webhook_url';
 const STORAGE_KEY_AUTO_UPLOAD = 'podcast_gdrive_auto_upload';
 const STORAGE_KEY_FOLDER_URL = 'podcast_gdrive_folder_url';
 
+export const USER_FOLDER_ID = '1ydZdH9y-CoA6K8T_dYA_IoN33vcqwSdB';
+export const DEFAULT_FOLDER_URL = 'https://drive.google.com/drive/folders/1ydZdH9y-CoA6K8T_dYA_IoN33vcqwSdB?usp=sharing';
+
 export const APPS_SCRIPT_TEMPLATE = `// GOOGLE APPS SCRIPT FOR PODCAST AUDIO UPLOADS
 // 1. Go to https://script.google.com/ and create a New Project
-// 2. Paste this code and replace YOUR_FOLDER_ID with your Google Drive Folder ID
-// 3. Click Deploy -> New deployment -> Select type: Web app -> Execute as: Me -> Who has access: Anyone -> Deploy
-// 4. Copy the Web app URL and paste it into Podcast Studio Settings
+// 2. Paste this entire code into the editor
+// 3. Click Deploy -> New deployment -> Select type: Web app
+// 4. Set "Execute as: Me" and "Who has access: Anyone" -> Click Deploy
+// 5. Copy the generated Web app URL and paste it into Podcast Studio Settings
 
 function doPost(e) {
   try {
     var data = JSON.parse(e.postData.contents);
     
-    // Paste your Google Drive Folder ID below:
-    var FOLDER_ID = "YOUR_GOOGLE_DRIVE_FOLDER_ID_HERE";
+    // Your Google Drive Folder ID:
+    var FOLDER_ID = "1ydZdH9y-CoA6K8T_dYA_IoN33vcqwSdB";
+    
+    // Automatically extract folder ID if a full URL was provided
+    if (FOLDER_ID.indexOf("/folders/") !== -1) {
+      FOLDER_ID = FOLDER_ID.split("/folders/")[1].split("?")[0];
+    }
+    
     var folder = DriveApp.getFolderById(FOLDER_ID);
     
     // Decode base64 recorded audio data
     var decoded = Utilities.base64Decode(data.base64Audio);
     var blob = Utilities.newBlob(decoded, data.mimeType || "audio/wav", data.fileName || "podcast_recording.wav");
     
-    // Save audio file to Google Drive
+    // Save the audio file to Google Drive
     var file = folder.createFile(blob);
     
-    // Set file description with technical recording metadata
+    // Set technical recording metadata in file description
     if (data.metadata) {
       file.setDescription(JSON.stringify(data.metadata, null, 2));
     }
@@ -58,7 +68,7 @@ export function setGoogleDriveWebhookUrl(url: string): void {
 }
 
 export function getGoogleDriveFolderUrl(): string {
-  return localStorage.getItem(STORAGE_KEY_FOLDER_URL) || '';
+  return localStorage.getItem(STORAGE_KEY_FOLDER_URL) || DEFAULT_FOLDER_URL;
 }
 
 export function setGoogleDriveFolderUrl(url: string): void {
