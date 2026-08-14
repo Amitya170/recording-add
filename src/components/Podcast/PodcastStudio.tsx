@@ -150,7 +150,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         setDevices(devs);
 
         // Transmit host mic stream over WebRTC to guest speaker
-        const hostStream = (engineA.current as any).stream as MediaStream | undefined;
+        const hostStream = engineA.current.mediaStream;
         if (hostStream && webrtcEngine.current) {
           await webrtcEngine.current.setLocalStream(hostStream);
         }
@@ -167,8 +167,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
   // Initialize Engines
   useEffect(() => {
-    const eA = new SpeakerAudioEngine('Speaker A (Host)');
-    const eB = new SpeakerAudioEngine('Speaker B (Guest)');
+    // Host mic: no self monitor (false), Guest incoming: monitor to speakers (true)
+    const eA = new SpeakerAudioEngine('Speaker A (Host)', false);
+    const eB = new SpeakerAudioEngine('Speaker B (Guest)', true);
     engineA.current = eA;
     engineB.current = eB;
 
@@ -211,7 +212,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       }
     };
     rEngine.onRemoteStream = async (remoteStream) => {
-      // Connect remote guest stream into engineB for waveform visualizer & recording
+      // Connect remote guest stream into engineB for waveform visualizer, monitoring & recording
       if (engineB.current) {
         await engineB.current.startMediaStream(remoteStream);
         setIsConnectedB(true);
@@ -219,7 +220,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
           engineB.current.startRecording();
         }
       }
-      // Play remote guest voice live through host speakers/headphones
+      // Audio element fallback for browsers with autoplay restrictions
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
         remoteAudioRef.current.volume = 1.0;
@@ -920,7 +921,12 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       )}
 
       {/* Hidden Live WebRTC Remote Guest Audio Element for Bi-Directional Call Playback */}
-      <audio ref={remoteAudioRef} autoPlay style={{ display: 'none' }} />
+      <audio
+        ref={remoteAudioRef}
+        autoPlay
+        playsInline
+        style={{ position: 'fixed', top: '-9999px', left: '-9999px', width: '1px', height: '1px', opacity: 0.001, pointerEvents: 'none' }}
+      />
 
       {/* Real-Time Google Drive Upload Progress Banner */}
       {driveUpload && (

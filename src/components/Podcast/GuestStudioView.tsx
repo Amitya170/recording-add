@@ -25,6 +25,7 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
   const { currentUser, logout } = useAuth();
 
   const engineGuest = useRef<SpeakerAudioEngine | null>(null);
+  const engineHostIncoming = useRef<SpeakerAudioEngine | null>(null);
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [selectedDevice, setSelectedDevice] = useState('');
   const [isConnected, setIsConnected] = useState(false);
@@ -66,7 +67,7 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
         setIsConnected(true);
 
         // Transmit Guest microphone stream over WebRTC to Host
-        const stream = (engineGuest.current as any).stream as MediaStream | undefined;
+        const stream = engineGuest.current.mediaStream;
         if (stream && webrtcEngine.current) {
           await webrtcEngine.current.setLocalStream(stream);
         }
@@ -79,8 +80,11 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
 
   // Initialize Guest Engine & WebRTC
   useEffect(() => {
-    const engine = new SpeakerAudioEngine('Guest Speaker');
+    // Guest own mic: monitor false, Host incoming voice: monitor true (play to speakers)
+    const engine = new SpeakerAudioEngine('Guest Speaker', false);
+    const eHost = new SpeakerAudioEngine('Host Speaker (Incoming)', true);
     engineGuest.current = engine;
+    engineHostIncoming.current = eHost;
 
     const refreshDevices = async () => {
       try {
@@ -101,7 +105,8 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     };
 
     const setup = async () => {
-      await engine.init(undefined, 44100);
+      const ctx = await engine.init(undefined, 44100);
+      await eHost.init(ctx, 44100);
       await refreshDevices();
     };
     setup();
@@ -113,8 +118,12 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     // WebRTC Engine Init (Guest Role)
     const rEngine = new WebRTCAudioEngine('guest');
     rEngine.onStatusChange = (st) => setWebrtcStatus(st);
-    rEngine.onRemoteStream = (remoteStream) => {
-      // Play incoming Host audio to Guest's headphones/speakers
+    rEngine.onRemoteStream = async (remoteStream) => {
+      // Connect incoming Host audio stream to eHost for live speaker playback
+      if (engineHostIncoming.current) {
+        await engineHostIncoming.current.startMediaStream(remoteStream);
+      }
+      // Audio element fallback
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
         remoteAudioRef.current.volume = 1.0;
@@ -312,7 +321,12 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
       </main>
 
       {/* Hidden Live WebRTC Remote Host Audio Element */}
-      <audio ref={remoteAudioRef} autoPlay style={{ display: 'none' }} />
+      <audio
+        ref={remoteAudioRef}
+        autoPlay
+        playsInline
+        style={{ position: 'fixed', top: '-9999px', left: '-9999px', width: '1px', height: '1px', opacity: 0.001, pointerEvents: 'none' }}
+      />
 
       {/* Modals */}
       {showHelp && <ShortcutsModal onClose={() => setShowHelp(false)} />}

@@ -126,13 +126,6 @@ export class WebRTCAudioEngine {
       ],
     });
 
-    // Ensure audio transceiver exists for bi-directional communication
-    try {
-      pc.addTransceiver('audio', { direction: 'sendrecv' });
-    } catch {
-      // Ignore if transceiver not supported in environment
-    }
-
     pc.onicecandidate = (event) => {
       if (event.candidate) {
         this.channel?.postMessage({
@@ -193,12 +186,17 @@ export class WebRTCAudioEngine {
     if (!audioTrack) return;
 
     const senders = pc.getSenders();
-    const existingSender = senders.find((s) => s.track && s.track.kind === 'audio');
+    const audioSender = senders.find((s) => (s.track ? s.track.kind === 'audio' : true));
 
-    if (existingSender) {
-      await existingSender.replaceTrack(audioTrack);
+    if (audioSender) {
+      await audioSender.replaceTrack(audioTrack);
     } else {
       pc.addTrack(audioTrack, stream);
+    }
+
+    // If already connected and role is host, trigger offer renegotiation
+    if (this.role === 'host' && pc.signalingState === 'stable') {
+      await this.createOffer();
     }
   }
 
@@ -230,6 +228,20 @@ export class WebRTCAudioEngine {
   private async handleOffer(offerSDP: RTCSessionDescriptionInit) {
     const pc = this.peerConnection || this.setupPeerConnection();
     try {
+      // Ensure local tracks are attached before creating answer
+      if (this.localStream) {
+        const audioTrack = this.localStream.getAudioTracks()[0];
+        if (audioTrack) {
+          const senders = pc.getSenders();
+          const audioSender = senders.find((s) => (s.track ? s.track.kind === 'audio' : true));
+          if (audioSender) {
+            await audioSender.replaceTrack(audioTrack);
+          } else {
+            pc.addTrack(audioTrack, this.localStream);
+          }
+        }
+      }
+
       await pc.setRemoteDescription(new RTCSessionDescription(offerSDP));
       await this.flushPendingCandidates();
 

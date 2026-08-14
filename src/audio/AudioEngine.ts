@@ -40,9 +40,15 @@ export class SpeakerAudioEngine {
 
   public speakerLabel: string;
   public meterCallback: ((data: SpeakerMeterData) => void) | null = null;
+  public monitorOutput: boolean = false;
 
-  constructor(label: string) {
+  constructor(label: string, monitorOutput: boolean = false) {
     this.speakerLabel = label;
+    this.monitorOutput = monitorOutput;
+  }
+
+  public get mediaStream(): MediaStream | null {
+    return this.stream;
   }
 
   public async init(sharedCtx?: AudioContext, sampleRate: number = 44100): Promise<AudioContext> {
@@ -64,6 +70,12 @@ export class SpeakerAudioEngine {
     this.noiseEngine.outputNode.connect(this.fxRack.inputNode);
     this.fxRack.outputNode.connect(this.gainNode);
     this.gainNode.connect(this.analyserEngine.node);
+
+    // If monitoring is enabled (e.g. for remote audio), connect gainNode to speakers
+    if (this.monitorOutput) {
+      this.gainNode.connect(this.ctx.destination);
+    }
+
     return this.ctx;
   }
 
