@@ -13,6 +13,7 @@ import {
   Lock,
   MessageSquare,
   AlertTriangle,
+  AlertCircle,
   RotateCcw,
   Cloud,
   CloudUpload,
