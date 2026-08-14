@@ -1,16 +1,16 @@
 /**
- * WebRTCAudioEngine — Cross-Device P2P Audio via PeerJS.
+ * WebRTCAudioEngine — Robust Cross-Device P2P Audio via PeerJS + STUN/TURN.
  *
- * Uses PeerJS (backed by a free hosted signaling server) so that Host and Guest
- * can connect across different machines / networks.
+ * Designed to connect Host and Guest across separate devices and different networks/routers.
  *
- * Protocol:
- *   Host  → registers as 'pcs_host_<sessionToken>'  (deterministic)
- *   Guest → registers with a random ID, then calls the host peer ID
- *
- * Two channels per session:
- *   MediaConnection — bidirectional audio (host mic ↔ guest mic)
- *   DataConnection  — control signals (recording state, mute, etc.)
+ * Key Architecture:
+ * 1. Deterministic host ID based on session token: `pcs_host_<sessionToken>`
+ * 2. High-reliability ICE servers (Google STUN + Metered OpenRelay TURN) for full NAT traversal.
+ * 3. Dual channel:
+ *    - DataConnection: Immediate handshake & control signals (recording state, etc.)
+ *    - MediaConnection: Full-duplex live microphone audio stream.
+ * 4. Silent audio track fallback: Guarantees WebRTC SDP always contains valid audio m-lines
+ *    even before the user selects their microphone hardware, allowing ICE candidates to gather immediately.
  */
 
 import Peer, { type DataConnection, type MediaConnection } from 'peerjs';
@@ -23,8 +23,51 @@ export interface WebRTCStatus {
 }
 
 function safePeerId(raw: string): string {
-  return raw.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
+  return raw.toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 40);
 }
+
+/**
+ * Creates a silent audio stream fallback if real microphone stream is not ready yet.
+ * WebRTC across NATs requires a valid media track to exchange ICE candidate pairs.
+ */
+function getEnsuredAudioStream(stream: MediaStream | null): MediaStream {
+  if (stream && stream.getAudioTracks().length > 0 && stream.getAudioTracks()[0].readyState === 'live') {
+    return stream;
+  }
+  try {
+    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    const dest = ctx.createMediaStreamDestination();
+    osc.connect(gain);
+    gain.connect(dest);
+    osc.start();
+    return dest.stream;
+  } catch {
+    return stream ?? new MediaStream();
+  }
+}
+
+const ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun3.l.google.com:19302' },
+  { urls: 'stun:stun4.l.google.com:19302' },
+  { urls: 'stun:stun.relay.metered.ca:80' },
+  {
+    urls: [
+      'turn:openrelay.metered.ca:80',
+      'turn:openrelay.metered.ca:443',
+      'turn:openrelay.metered.ca:443?transport=tcp',
+      'turns:openrelay.metered.ca:443?transport=tcp',
+    ],
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+];
 
 export class WebRTCAudioEngine {
   private peer: Peer | null = null;
@@ -41,7 +84,7 @@ export class WebRTCAudioEngine {
   public isConnected: boolean = false;
   public onStatusChange?: (status: WebRTCStatus) => void;
   public onRemoteStream?: (stream: MediaStream) => void;
-  public onSignal?: (message: unknown) => void;
+  public onSignal?: (message: any) => void;
 
   constructor(role: 'host' | 'guest', sessionToken: string = 'podcast_default_session') {
     this.role = role;
@@ -66,69 +109,49 @@ export class WebRTCAudioEngine {
 
     try {
       this.peer = new Peer(peerId as string, {
-        host: '0.peerjs.com',
-        port: 443,
-        path: '/',
-        secure: true,
         debug: 0,
         config: {
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            {
-              urls: 'turn:openrelay.metered.ca:80',
-              username: 'openrelayproject',
-              credential: 'openrelayproject',
-            },
-            {
-              urls: 'turn:openrelay.metered.ca:443',
-              username: 'openrelayproject',
-              credential: 'openrelayproject',
-            },
-          ],
+          iceServers: ICE_SERVERS,
+          sdpSemantics: 'unified-plan',
         },
       });
     } catch (e) {
-      console.error('[PeerJS] Peer creation error:', e);
-      this.scheduleReconnect(5000);
+      console.error('[WebRTC] Peer creation error:', e);
+      this.scheduleReconnect(4000);
       return;
     }
 
     this.peer.on('open', (id) => {
-      console.log(`[PeerJS] ${this.role} open — peer ID: ${id}`);
+      console.log(`[WebRTC] ${this.role} online — peer ID: ${id}`);
       if (this.role === 'host') {
         this.updateStatus('Waiting for Guest to Join…');
         this.listenAsHost();
       } else {
-        this.updateStatus('Calling Host…');
-        // Start a retry loop so guest re-calls if host isn't online yet
+        this.updateStatus('Connecting to Host…');
         this.startGuestCallLoop();
       }
     });
 
     this.peer.on('error', (err) => {
-      console.warn(`[PeerJS] ${this.role} error:`, err.type, err.message);
+      console.warn(`[WebRTC] ${this.role} peer error:`, err.type, err.message);
       switch (err.type) {
         case 'unavailable-id':
-          // Host ID already taken by another session — just listen; PeerJS server
-          // will route incoming calls to whichever peer holds the ID.
           if (this.role === 'host') {
             this.updateStatus('Session ID in use — reconnecting…');
             this.scheduleReconnect(3000);
           }
           break;
         case 'peer-unavailable':
-          // Host not online yet — guest will retry via the call loop
           this.updateStatus('Host not online yet — retrying…');
           break;
         case 'network':
         case 'disconnected':
         case 'server-error':
-          this.updateStatus('Network error — reconnecting…');
-          this.scheduleReconnect(5000);
+          this.updateStatus('Network issue — reconnecting…');
+          this.scheduleReconnect(4000);
           break;
         default:
-          this.updateStatus(`Issue (${err.type}) — retrying…`);
+          this.updateStatus(`Connecting (${err.type})…`);
           this.scheduleReconnect(5000);
       }
     });
@@ -137,75 +160,83 @@ export class WebRTCAudioEngine {
       if (!this.isConnected && !this.isDisposed) {
         this.updateStatus('Reconnecting to server…');
         try { this.peer?.reconnect(); } catch {}
-        this.scheduleReconnect(5000);
+        this.scheduleReconnect(4000);
       }
     });
   }
 
   // ──────────────────────────────────────────────────────────────
-  // HOST — listen for incoming calls
+  // HOST — Listen for incoming guest connection & call
   // ──────────────────────────────────────────────────────────────
 
   private listenAsHost() {
     if (!this.peer) return;
 
+    // Incoming DataConnection from guest
+    this.peer.on('connection', (conn) => {
+      console.log('[WebRTC] Host: guest data connection received from', conn.peer);
+      try { this.dataConn?.close(); } catch {}
+      this.dataConn = conn;
+
+      conn.on('open', () => {
+        console.log('[WebRTC] Host: data channel OPEN with guest');
+        this.updateStatus('Guest Connected ✓ — P2P Live', true);
+      });
+
+      conn.on('data', (data) => {
+        this.onSignal?.(data);
+      });
+
+      conn.on('close', () => {
+        console.log('[WebRTC] Host: data channel closed');
+        this.handleDisconnect('Guest disconnected — waiting to reconnect…');
+      });
+
+      conn.on('error', (e) => console.warn('[WebRTC] Host data error:', e));
+    });
+
+    // Incoming MediaConnection (Audio Call) from guest
     this.peer.on('call', (call) => {
-      console.log('[PeerJS] Host: incoming call from guest', call.peer);
-      // Close any old media connection first
+      console.log('[WebRTC] Host: incoming audio call from guest', call.peer);
       try { this.mediaConn?.close(); } catch {}
       this.mediaConn = call;
 
-      // Answer with host's mic stream (or empty stream if not yet selected)
-      call.answer(this.localStream ?? new MediaStream());
-
-      // Mark connected immediately on answer — don't wait for guest's stream
-      // (guest may have no mic yet; we still want UI to show "connected")
-      this.updateStatus('Guest Connected ✓ — P2P Call Active', true);
+      const hostStream = getEnsuredAudioStream(this.localStream);
+      call.answer(hostStream);
+      this.updateStatus('Guest Connected ✓ — Audio Call Active', true);
 
       call.on('stream', (remoteStream) => {
-        console.log('[PeerJS] Host: received guest audio stream');
+        console.log('[WebRTC] Host: received guest audio stream', remoteStream.id);
         this.remoteStream = remoteStream;
-        // Update status and deliver stream (only if tracks exist)
-        if (remoteStream.getAudioTracks().length > 0) {
-          this.updateStatus('Guest Connected ✓ — Audio Live', true);
-          this.onRemoteStream?.(remoteStream);
-        }
+        this.updateStatus('Guest Connected ✓ — Audio Live', true);
+        this.onRemoteStream?.(remoteStream);
       });
 
       call.on('close', () => {
-        console.log('[PeerJS] Host: guest call closed');
-        this.handleDisconnect('Guest disconnected — waiting for reconnect…');
+        console.log('[WebRTC] Host: guest audio call closed');
+        this.handleDisconnect('Guest audio disconnected');
       });
 
-      call.on('error', (e) => console.warn('[PeerJS] Host call error:', e));
-    });
-
-    // Incoming data channel from guest
-    this.peer.on('connection', (conn) => {
-      console.log('[PeerJS] Host: data connection from', conn.peer);
-      try { this.dataConn?.close(); } catch {}
-      this.dataConn = conn;
-      conn.on('data', (data) => { this.onSignal?.(data); });
-      conn.on('error', (e) => console.warn('[PeerJS] Host data error:', e));
+      call.on('error', (e) => console.warn('[WebRTC] Host call error:', e));
     });
   }
 
   // ──────────────────────────────────────────────────────────────
-  // GUEST — call host, retry until connected
+  // GUEST — Connect and call Host with auto-retry
   // ──────────────────────────────────────────────────────────────
 
   private startGuestCallLoop() {
     this.stopGuestCallLoop();
-    // Try immediately, then retry every 4 seconds until connected
     this.attemptGuestCall();
+
     this.guestCallRetryInterval = setInterval(() => {
       if (!this.isConnected && !this.isDisposed) {
-        console.log('[PeerJS] Guest: retry call to host…');
+        console.log('[WebRTC] Guest: retrying P2P call to Host…');
         this.attemptGuestCall();
       } else {
         this.stopGuestCallLoop();
       }
-    }, 4000);
+    }, 3500);
   }
 
   private stopGuestCallLoop() {
@@ -219,46 +250,56 @@ export class WebRTCAudioEngine {
     if (!this.peer || this.peer.destroyed || this.isDisposed) return;
 
     const hostId = `pcs_host_${this.sessionToken}`;
-    console.log('[PeerJS] Guest: calling host peer ID:', hostId);
+    console.log('[WebRTC] Guest: connecting to host ID:', hostId);
 
-    // Close any existing media connection
-    try { this.mediaConn?.close(); } catch {}
-
-    // Call with local stream (or empty MediaStream if mic not yet selected)
-    const stream = this.localStream ?? new MediaStream();
-    const call = this.peer.call(hostId, stream);
-    if (!call) {
-      console.warn('[PeerJS] Guest: peer.call() returned null — host may be offline');
-      return;
-    }
-    this.mediaConn = call;
-
-    call.on('stream', (remoteStream) => {
-      console.log('[PeerJS] Guest: received host audio stream');
-      this.remoteStream = remoteStream;
-      this.stopGuestCallLoop();
-      this.updateStatus('Connected ✓ — Host Audio Live', true);
-      this.onRemoteStream?.(remoteStream);
-    });
-
-    call.on('close', () => {
-      if (!this.isDisposed) {
-        this.handleDisconnect('Host disconnected — retrying…');
-        this.startGuestCallLoop();
-      }
-    });
-
-    call.on('error', (e) => {
-      console.warn('[PeerJS] Guest call error:', e);
-    });
-
-    // Also open a data channel to host (for recording state signals)
+    // 1. Data Connection (Immediate handshake)
     try { this.dataConn?.close(); } catch {}
     const conn = this.peer.connect(hostId, { reliable: true });
     this.dataConn = conn;
-    conn.on('open', () => console.log('[PeerJS] Guest: data channel open'));
-    conn.on('data', (data) => { this.onSignal?.(data); });
-    conn.on('error', (e) => console.warn('[PeerJS] Guest data error:', e));
+
+    conn.on('open', () => {
+      console.log('[WebRTC] Guest: data channel OPEN with host');
+      this.stopGuestCallLoop();
+      this.updateStatus('Connected to Host ✓ (P2P Call Active)', true);
+    });
+
+    conn.on('data', (data) => {
+      this.onSignal?.(data);
+    });
+
+    conn.on('close', () => {
+      this.handleDisconnect('Host disconnected — retrying…');
+      this.startGuestCallLoop();
+    });
+
+    conn.on('error', (e) => {
+      console.warn('[WebRTC] Guest data conn error:', e);
+    });
+
+    // 2. Audio Media Call
+    try { this.mediaConn?.close(); } catch {}
+    const guestStream = getEnsuredAudioStream(this.localStream);
+    const call = this.peer.call(hostId, guestStream);
+
+    if (call) {
+      this.mediaConn = call;
+
+      call.on('stream', (remoteStream) => {
+        console.log('[WebRTC] Guest: received host audio stream', remoteStream.id);
+        this.remoteStream = remoteStream;
+        this.stopGuestCallLoop();
+        this.updateStatus('Connected to Host ✓ (Host Audio Live)', true);
+        this.onRemoteStream?.(remoteStream);
+      });
+
+      call.on('close', () => {
+        this.handleDisconnect('Host audio stream closed');
+      });
+
+      call.on('error', (e) => {
+        console.warn('[WebRTC] Guest call error:', e);
+      });
+    }
   }
 
   // ──────────────────────────────────────────────────────────────
@@ -266,39 +307,47 @@ export class WebRTCAudioEngine {
   // ──────────────────────────────────────────────────────────────
 
   /**
-   * Set the local mic stream.
-   * - Host: the new stream is used on the next incoming call.answer()
-   *         and immediately sent to any active call via replaceTrack.
-   * - Guest: immediately re-calls the host with the new stream.
+   * Updates the microphone stream.
+   * If a call is already active, updates the RTP sender track on the fly.
    */
   public async setLocalStream(stream: MediaStream): Promise<void> {
     this.localStream = stream;
-    const trackCount = stream.getAudioTracks().length;
-    console.log(`[PeerJS] ${this.role} setLocalStream — ${trackCount} audio tracks`);
+    const audioTrack = stream.getAudioTracks()[0];
+    console.log(`[WebRTC] ${this.role} setLocalStream with track:`, audioTrack?.label);
 
-    if (this.role === 'host' && this.mediaConn) {
-      // Replace track in the existing call so guest hears updated host mic
-      const pc = (this.mediaConn as unknown as { peerConnection: RTCPeerConnection }).peerConnection;
+    if (!audioTrack) return;
+
+    if (this.mediaConn) {
+      const pc = (this.mediaConn as unknown as { peerConnection?: RTCPeerConnection }).peerConnection;
       if (pc) {
-        const audioTrack = stream.getAudioTracks()[0];
-        const sender = pc.getSenders().find((s) => s.track?.kind === 'audio');
-        if (sender && audioTrack) {
-          try { await sender.replaceTrack(audioTrack); } catch (e) { console.warn('[PeerJS] replaceTrack failed:', e); }
+        const senders = pc.getSenders();
+        const audioSender = senders.find((s) => s.track?.kind === 'audio' || !s.track);
+        if (audioSender) {
+          try {
+            await audioSender.replaceTrack(audioTrack);
+            console.log(`[WebRTC] ${this.role} replaced active audio track successfully`);
+            return;
+          } catch (e) {
+            console.warn('[WebRTC] replaceTrack failed, triggering call reconnect:', e);
+          }
         }
       }
-    } else if (this.role === 'guest') {
-      // Re-call host with the new mic stream
-      if (this.peer && !this.peer.destroyed && !this.isDisposed) {
-        this.attemptGuestCall();
-      }
+    }
+
+    if (this.role === 'guest' && this.isConnected) {
+      this.attemptGuestCall();
     }
   }
 
-  /** Send a control signal to the remote peer via DataConnection. */
-  public sendSignal(message: unknown): void {
-    if (this.dataConn?.open) {
-      try { this.dataConn.send(message); } catch (e) {
-        console.warn('[PeerJS] sendSignal error:', e);
+  /**
+   * Send control data to the peer via DataConnection.
+   */
+  public sendSignal(message: any): void {
+    if (this.dataConn && this.dataConn.open) {
+      try {
+        this.dataConn.send(message);
+      } catch (e) {
+        console.warn('[WebRTC] sendSignal error:', e);
       }
     }
   }
@@ -319,7 +368,7 @@ export class WebRTCAudioEngine {
     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
     this.reconnectTimeout = setTimeout(() => {
       if (this.isDisposed || this.isConnected) return;
-      console.log(`[PeerJS] Full reconnect as ${this.role}…`);
+      console.log(`[WebRTC] Reconnecting peer as ${this.role}…`);
       try { this.peer?.destroy(); } catch {}
       this.peer = null;
       this.initPeer();

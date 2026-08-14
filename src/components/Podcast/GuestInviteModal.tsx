@@ -104,6 +104,12 @@ export const GuestInviteModal: React.FC<GuestInviteModalProps> = ({ hostName, se
                 ✓ Copied invite link to clipboard! Send it to your guest speaker.
               </div>
             )}
+
+            {(window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && (
+              <div style={{ fontSize: '0.72rem', color: 'var(--accent-amber)', background: 'rgba(255,183,0,0.08)', border: '1px solid rgba(255,183,0,0.25)', borderRadius: '6px', padding: '8px 10px', marginTop: '4px' }}>
+                💡 <strong>Testing on a 2nd device on the same Wi-Fi?</strong> Replace <code>localhost</code> in the link with your computer's local Wi-Fi IP address (e.g. <code>http://192.168.1.X:5173</code>) so the other device can open the page.
+              </div>
+            )}
           </div>
         )}
       </div>

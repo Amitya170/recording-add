@@ -117,7 +117,7 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
         await engineHostIncoming.current.startMediaStream(remoteStream);
       }
     };
-    rEngine.onSignal = (sig) => {
+    rEngine.onSignal = (sig: any) => {
       if (sig?.type === 'RECORDING_STATE') {
         if (sig.isRecording) {
           if (sig.isPaused) {
