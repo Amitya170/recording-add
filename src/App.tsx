@@ -12,6 +12,7 @@ const AppRouter: React.FC = () => {
   const [inviteToken, setInviteToken] = useState<string | null>(null);
   const [guestNameParam, setGuestNameParam] = useState<string | undefined>(undefined);
   const [hostNameParam, setHostNameParam] = useState<string | undefined>(undefined);
+  const [sessionToken, setSessionToken] = useState<string>('podcast_main_session');
 
   // Check URL parameters for invites or guest session links
   useEffect(() => {
@@ -22,8 +23,10 @@ const AppRouter: React.FC = () => {
     }
     const guest = params.get('guest');
     const host = params.get('host');
+    const sess = params.get('session');
     if (guest) setGuestNameParam(guest);
     if (host) setHostNameParam(host);
+    if (sess) setSessionToken(sess);
   }, []);
 
   // Invite Token Registration Page
@@ -41,7 +44,7 @@ const AppRouter: React.FC = () => {
 
   // Guest Link Access (Activated on Guest Invite Link)
   if (guestNameParam) {
-    return <GuestStudioView guestNameParam={guestNameParam} hostNameParam={hostNameParam} />;
+    return <GuestStudioView guestNameParam={guestNameParam} hostNameParam={hostNameParam} sessionToken={sessionToken} />;
   }
 
   // Unauthenticated → Login Page
@@ -56,11 +59,11 @@ const AppRouter: React.FC = () => {
 
   // Guest Role → Dedicated Guest Console View
   if (currentUser?.role === 'user') {
-    return <GuestStudioView guestNameParam={currentUser.name} />;
+    return <GuestStudioView guestNameParam={currentUser.name} sessionToken={sessionToken} />;
   }
 
   // Host Role → Full Podcast Recording Studio DAW
-  return <PodcastStudio />;
+  return <PodcastStudio sessionToken={sessionToken} />;
 };
 
 export const App: React.FC = () => {

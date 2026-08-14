@@ -138,18 +138,20 @@ export class WebRTCAudioEngine {
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        const candidateJSON = event.candidate.toJSON
-          ? event.candidate.toJSON()
-          : {
-              candidate: event.candidate.candidate,
-              sdpMid: event.candidate.sdpMid,
-              sdpMLineIndex: event.candidate.sdpMLineIndex,
-              usernameFragment: event.candidate.usernameFragment,
-            };
-        this.channel?.postMessage({
-          type: 'ICE_CANDIDATE',
-          data: candidateJSON,
-        });
+        const candidateJSON = {
+          candidate: event.candidate.candidate,
+          sdpMid: event.candidate.sdpMid,
+          sdpMLineIndex: event.candidate.sdpMLineIndex,
+          usernameFragment: event.candidate.usernameFragment,
+        };
+        try {
+          this.channel?.postMessage({
+            type: 'ICE_CANDIDATE',
+            data: JSON.parse(JSON.stringify(candidateJSON)),
+          });
+        } catch (err) {
+          console.warn('Failed to post ICE candidate:', err);
+        }
       }
     };
 

@@ -19,9 +19,10 @@ import { TranscriptPanel } from './TranscriptPanel';
 interface GuestStudioViewProps {
   guestNameParam?: string;
   hostNameParam?: string;
+  sessionToken?: string;
 }
 
-export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam, hostNameParam: _hostNameParam }) => {
+export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam, hostNameParam: _hostNameParam, sessionToken }) => {
   const { currentUser, logout } = useAuth();
 
   const engineGuest = useRef<SpeakerAudioEngine | null>(null);
@@ -116,7 +117,7 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     }
 
     // WebRTC Engine Init (Guest Role)
-    const rEngine = new WebRTCAudioEngine('guest');
+    const rEngine = new WebRTCAudioEngine('guest', sessionToken || 'podcast_main_session');
     rEngine.onStatusChange = (st) => setWebrtcStatus(st);
     rEngine.onRemoteStream = async (remoteStream) => {
       // Connect incoming Host audio stream to eHost for live speaker playback
@@ -160,7 +161,7 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
       rEngine.dispose();
       sttEngine.current?.stop();
     };
-  }, [handleDeviceChange]);
+  }, [handleDeviceChange, sessionToken]);
 
   // Visualizer Tick
   useEffect(() => {

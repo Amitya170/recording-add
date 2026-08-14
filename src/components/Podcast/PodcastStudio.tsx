@@ -49,9 +49,10 @@ import { getAutoUploadToDrive, uploadAudioBlobToDrive } from '../../auth/GoogleD
 interface PodcastStudioProps {
   guestNameParam?: string;
   hostNameParam?: string;
+  sessionToken?: string;
 }
 
-export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, hostNameParam }) => {
+export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, hostNameParam, sessionToken }) => {
   const { currentUser, logout } = useAuth();
 
   const engineA = useRef<SpeakerAudioEngine | null>(null);
@@ -204,7 +205,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
     // WebRTC Engine Init for Bi-Directional Call Audio
     const rRole = currentUser?.role === 'user' ? 'guest' : 'host';
-    const rEngine = new WebRTCAudioEngine(rRole);
+    const rEngine = new WebRTCAudioEngine(rRole, sessionToken || 'podcast_main_session');
     rEngine.onStatusChange = (st) => {
       setWebrtcStatus(st);
       if (st.connected) {
@@ -251,7 +252,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       rEngine.dispose();
       sttEngine.current?.stop();
     };
-  }, [currentUser?.role, handleDeviceChangeA]);
+  }, [currentUser?.role, handleDeviceChangeA, sessionToken]);
 
   // Visualizer Loop
   useEffect(() => {
@@ -891,6 +892,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       {showInviteModal && (
         <GuestInviteModal
           hostName={hostDisplayName}
+          sessionToken={sessionToken}
           onClose={() => setShowInviteModal(false)}
         />
       )}

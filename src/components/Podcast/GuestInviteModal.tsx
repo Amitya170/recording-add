@@ -3,10 +3,11 @@ import { X, Copy, CheckCircle, Mail, UserPlus, Link2 } from 'lucide-react';
 
 interface GuestInviteModalProps {
   hostName: string;
+  sessionToken?: string;
   onClose: () => void;
 }
 
-export const GuestInviteModal: React.FC<GuestInviteModalProps> = ({ hostName, onClose }) => {
+export const GuestInviteModal: React.FC<GuestInviteModalProps> = ({ hostName, sessionToken, onClose }) => {
   const [guestName, setGuestName] = useState('');
   const [guestEmail, setGuestEmail] = useState('');
   const [inviteLink, setInviteLink] = useState('');
@@ -14,7 +15,7 @@ export const GuestInviteModal: React.FC<GuestInviteModalProps> = ({ hostName, on
 
   const handleGenerateLink = (e: React.FormEvent) => {
     e.preventDefault();
-    const sessionId = 'studio_sess_' + Date.now().toString(36);
+    const sessionId = sessionToken || 'podcast_main_session';
     const baseUrl = window.location.origin + window.location.pathname;
     const link = `${baseUrl}?session=${sessionId}&guest=${encodeURIComponent(guestName || 'Guest Speaker')}&host=${encodeURIComponent(hostName)}`;
     setInviteLink(link);
