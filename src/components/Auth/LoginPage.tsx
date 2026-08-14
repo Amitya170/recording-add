@@ -82,6 +82,37 @@ export const LoginPage: React.FC = () => {
           <LogIn size={18} />
           {loading ? 'Authenticating...' : 'Sign In to Studio Console'}
         </button>
+
+        {/* Quick Fill Demo Credentials */}
+        <div style={{ marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--border-dim)' }}>
+          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textAlign: 'center', marginBottom: '8px', letterSpacing: '0.05em' }}>
+            DEMO CREDENTIAL QUICK FILL
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            <button
+              type="button"
+              className="btn-transport"
+              style={{ fontSize: '0.72rem', padding: '6px', height: 'auto', justifyContent: 'center' }}
+              onClick={() => {
+                setEmail('admin@studio.local');
+                setPassword('admin123');
+              }}
+            >
+              Fill Admin
+            </button>
+            <button
+              type="button"
+              className="btn-transport"
+              style={{ fontSize: '0.72rem', padding: '6px', height: 'auto', justifyContent: 'center' }}
+              onClick={() => {
+                setEmail('host@studio.local');
+                setPassword('host123');
+              }}
+            >
+              Fill Host
+            </button>
+          </div>
+        </div>
       </form>
     </div>
   );
