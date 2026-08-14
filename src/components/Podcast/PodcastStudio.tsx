@@ -124,6 +124,16 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
   const [isWebhookConfigured, setIsWebhookConfigured] = useState(Boolean(getGoogleDriveWebhookUrl()));
 
+  // Unique Studio WebRTC Session Room Token (generated per host session)
+  const [studioSessionToken] = useState<string>(() => {
+    if (sessionToken && sessionToken !== 'podcast_main_session') {
+      return sessionToken;
+    }
+    const hostKey = currentUser?.id || currentUser?.name || 'host';
+    const safeKey = hostKey.toLowerCase().replace(/[^a-z0-9]/g, '_');
+    return `session_${safeKey}_${Date.now().toString(36)}`;
+  });
+
   useEffect(() => {
     const checkWebhook = () => {
       setIsWebhookConfigured(Boolean(getGoogleDriveWebhookUrl()));
@@ -145,7 +155,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
   });
   const webrtcEngine = useRef<WebRTCAudioEngine | null>(null);
   const [activeFxEngine, setActiveFxEngine] = useState<SpeakerAudioEngine | null>(null);
-  const [activeFxLabel, setActiveFxLabel] = useState<string>('');
+  const [activeFxLabel, setActiveFxLabel] = useState('Speaker A (Host)');
 
   // AI Noise Suppression & Speech Transcripts & Recovery State
   const [isNoiseA, setIsNoiseA] = useState(true);
@@ -158,8 +168,8 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
   const sttEngine = useRef<SpeechToTextEngine | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  const hostDisplayName = currentUser?.name || hostNameParam || 'Host Speaker';
-  const guestDisplayName = guestNameParam || 'Guest Speaker';
+  const hostDisplayName = hostNameParam || (currentUser?.role === 'user' ? 'Host Speaker' : currentUser?.name || 'Host Speaker');
+  const guestDisplayName = guestNameParam || (currentUser?.role === 'user' ? currentUser?.name : 'Guest Speaker');
   const hostDisplayNameRef = useRef(hostDisplayName);
   const guestDisplayNameRef = useRef(guestDisplayName);
   useEffect(() => {
@@ -201,7 +211,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     // IMPORTANT: Create WebRTC engine FIRST (synchronously) so it is ready
     // when handleDeviceChangeA fires from refreshDevices() below.
     const rRole = currentUser?.role === 'user' ? 'guest' : 'host';
-    const rEngine = new WebRTCAudioEngine(rRole, sessionToken || 'podcast_main_session');
+    const rEngine = new WebRTCAudioEngine(rRole, studioSessionToken);
     rEngine.onStatusChange = (st) => {
       setWebrtcStatus(st);
       if (st.connected) {
@@ -1208,7 +1218,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       {showInviteModal && (
         <GuestInviteModal
           hostName={hostDisplayName}
-          sessionToken={sessionToken}
+          sessionToken={studioSessionToken}
           onClose={() => setShowInviteModal(false)}
         />
       )}

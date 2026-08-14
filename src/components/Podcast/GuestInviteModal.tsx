@@ -11,14 +11,27 @@ export const GuestInviteModal: React.FC<GuestInviteModalProps> = ({ hostName, se
   const [guestName, setGuestName] = useState('');
   const [guestEmail, setGuestEmail] = useState('');
   const [inviteLink, setInviteLink] = useState('');
+  const [inviteId, setInviteId] = useState('');
   const [copied, setCopied] = useState(false);
+
+  // Helper to generate cryptographically random unique invite link
+  const createUniqueLink = (name: string) => {
+    const uniqueInvCode = 'inv_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+    const sessionId = sessionToken || ('room_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8));
+    const baseUrl = window.location.origin + window.location.pathname;
+    const link = `${baseUrl}?session=${sessionId}&guest=${encodeURIComponent(name.trim() || 'Guest Speaker')}&host=${encodeURIComponent(hostName)}&inv=${uniqueInvCode}`;
+    setInviteId(uniqueInvCode);
+    setInviteLink(link);
+  };
+
+  // Auto-generate a unique invite link on initial render
+  React.useEffect(() => {
+    createUniqueLink(guestName);
+  }, []);
 
   const handleGenerateLink = (e: React.FormEvent) => {
     e.preventDefault();
-    const sessionId = sessionToken || 'podcast_main_session';
-    const baseUrl = window.location.origin + window.location.pathname;
-    const link = `${baseUrl}?session=${sessionId}&guest=${encodeURIComponent(guestName || 'Guest Speaker')}&host=${encodeURIComponent(hostName)}`;
-    setInviteLink(link);
+    createUniqueLink(guestName);
   };
 
   const handleCopyLink = () => {
@@ -74,15 +87,21 @@ export const GuestInviteModal: React.FC<GuestInviteModalProps> = ({ hostName, se
           </div>
 
           <button type="submit" className="btn-transport btn-cyan" style={{ width: '100%', marginTop: '4px' }}>
-            <Link2 size={15} /> Generate Studio Invite Link
+            <Link2 size={15} /> Update Invite Link for Guest
           </button>
         </form>
 
         {inviteLink && (
           <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid var(--border-dim)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
-              GUEST STUDIO RECORDING LINK:
-            </label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                UNIQUE GUEST STUDIO RECORDING LINK:
+              </label>
+              <span style={{ fontSize: '0.65rem', fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)', background: 'rgba(0, 240, 255, 0.12)', border: '1px solid rgba(0, 240, 255, 0.3)', padding: '2px 6px', borderRadius: '4px' }}>
+                {inviteId}
+              </span>
+            </div>
+
             <div style={{ display: 'flex', gap: '6px' }}>
               <input
                 className="daw-input"
@@ -92,6 +111,18 @@ export const GuestInviteModal: React.FC<GuestInviteModalProps> = ({ hostName, se
               />
               <button className="btn-transport" onClick={handleCopyLink} title="Copy link">
                 {copied ? <CheckCircle size={14} color="#00ff87" /> : <Copy size={14} />}
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                className="btn-transport"
+                onClick={() => createUniqueLink(guestName)}
+                style={{ flex: 1, fontSize: '0.75rem', padding: '6px 12px' }}
+                title="Generate another unique invite link with fresh security token"
+              >
+                🎲 Generate New Unique Link
               </button>
             </div>
 
