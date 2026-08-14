@@ -213,14 +213,15 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
 
       {/* Primary Mute Microphone Button */}
       <button
+        type="button"
         className={`btn-mute ${isMuted ? 'muted' : ''}`}
         onClick={onToggleMute}
         style={{
           borderColor: isMuted ? 'rgba(255,42,95,0.6)' : colorBorder,
           color: isMuted ? '#ff2a5f' : colorHex,
           background: isMuted ? 'rgba(255,42,95,0.12)' : colorDim,
+          cursor: 'pointer',
         }}
-        disabled={!isConnected}
       >
         {isMuted ? <MicOff size={22} /> : <Mic size={22} />}
         <span>{isMuted ? 'MICROPHONE MUTED (CLICK TO UNMUTE)' : 'MICROPHONE ACTIVE (CLICK TO MUTE)'}</span>

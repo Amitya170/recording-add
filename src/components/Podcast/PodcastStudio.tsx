@@ -529,6 +529,8 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     if (engineA.current) {
       const muted = engineA.current.toggleMute();
       setIsMutedA(muted);
+    } else {
+      setIsMutedA((prev) => !prev);
     }
   };
 
@@ -536,6 +538,17 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     if (engineB.current) {
       const muted = engineB.current.toggleMute();
       setIsMutedB(muted);
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.muted = muted;
+      }
+    } else {
+      setIsMutedB((prev) => {
+        const next = !prev;
+        if (remoteAudioRef.current) {
+          remoteAudioRef.current.muted = next;
+        }
+        return next;
+      });
     }
   };
 

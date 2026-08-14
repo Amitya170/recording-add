@@ -214,6 +214,8 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     if (engineGuest.current) {
       const muted = engineGuest.current.toggleMute();
       setIsMuted(muted);
+    } else {
+      setIsMuted((prev) => !prev);
     }
   };
 

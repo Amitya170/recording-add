@@ -157,6 +157,8 @@ export class SpeakerAudioEngine {
     silentSink.gain.value = 0;
     this.scriptNode.connect(silentSink);
     silentSink.connect(this.ctx.destination);
+
+    this.applyMuteState();
   }
 
   public async startMediaStream(stream: MediaStream): Promise<void> {
@@ -236,6 +238,8 @@ export class SpeakerAudioEngine {
     this.silentSink.gain.value = 0;
     this.scriptNode.connect(this.silentSink);
     this.silentSink.connect(this.ctx.destination);
+
+    this.applyMuteState();
   }
 
   public setNoiseSuppression(enabled: boolean): void {
@@ -307,10 +311,24 @@ export class SpeakerAudioEngine {
 
   public toggleMute(): boolean {
     this.isMuted = !this.isMuted;
+    this.applyMuteState();
+    return this.isMuted;
+  }
+
+  public setMuted(muted: boolean): void {
+    this.isMuted = muted;
+    this.applyMuteState();
+  }
+
+  public applyMuteState(): void {
     if (this.gainNode) {
       this.gainNode.gain.value = this.isMuted ? 0 : this.userGain;
     }
-    return this.isMuted;
+    if (this.stream) {
+      this.stream.getAudioTracks().forEach((track) => {
+        track.enabled = !this.isMuted;
+      });
+    }
   }
 
   public getMuted(): boolean {
