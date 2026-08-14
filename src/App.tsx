@@ -5,6 +5,7 @@ import { RegisterPage } from './components/Auth/RegisterPage';
 import { AdminPanel } from './components/Admin/AdminPanel';
 import { PodcastStudio } from './components/Podcast/PodcastStudio';
 import { GuestStudioView } from './components/Podcast/GuestStudioView';
+import { ScrollControls } from './components/Common/ScrollControls';
 import './styles/daw-theme.css';
 
 const AppRouter: React.FC = () => {
@@ -70,6 +71,7 @@ export const App: React.FC = () => {
   return (
     <AuthProvider>
       <AppRouter />
+      <ScrollControls />
     </AuthProvider>
   );
 };
