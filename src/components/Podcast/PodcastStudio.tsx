@@ -47,7 +47,14 @@ import { TranscriptPanel } from './TranscriptPanel';
 import type { Marker } from '../Markers/MarkerList';
 import { MarkerList } from '../Markers/MarkerList';
 import { SoundboardPanel } from './SoundboardPanel';
-import { getAutoUploadToDrive, uploadAudioBlobToDrive, DEFAULT_FOLDER_URL } from '../../auth/GoogleDriveUploader';
+import {
+  getAutoUploadToDrive,
+  uploadAudioBlobToDrive,
+  DEFAULT_FOLDER_URL,
+  getGoogleDriveWebhookUrl,
+  setGoogleDriveWebhookUrl,
+  APPS_SCRIPT_TEMPLATE,
+} from '../../auth/GoogleDriveUploader';
 import { DriveUploadNotificationModal } from '../Modals/DriveUploadNotificationModal';
 
 interface PodcastStudioProps {
@@ -119,6 +126,11 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     error?: string;
     sessionTitle?: string;
   } | null>(null);
+
+  const [showDriveConfigModal, setShowDriveConfigModal] = useState(false);
+  const [driveWebhookInput, setDriveWebhookInput] = useState(getGoogleDriveWebhookUrl());
+  const [copiedScript, setCopiedScript] = useState(false);
+  const [saveWebhookSuccess, setSaveWebhookSuccess] = useState(false);
 
   // WebRTC P2P & FX Rack State
   const [webrtcStatus, setWebrtcStatus] = useState<WebRTCStatus>({
@@ -1144,6 +1156,25 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
               >
                 Drive Folder <ExternalLink size={10} />
               </a>
+
+              <button
+                type="button"
+                className="btn-transport"
+                onClick={() => setShowDriveConfigModal(true)}
+                style={{
+                  padding: '5px 10px',
+                  fontSize: '0.72rem',
+                  color: 'var(--accent-cyan)',
+                  borderColor: 'rgba(0, 240, 255, 0.3)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  borderRadius: '6px',
+                }}
+                title="Configure Google Apps Script Webhook URL for Google Drive"
+              >
+                ⚙️ Webhook Setup
+              </button>
             </div>
           </div>
         )}
@@ -1360,6 +1391,85 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
               </a>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Google Drive Webhook Configuration Modal in Studio */}
+      {showDriveConfigModal && (
+        <div className="modal-overlay" onClick={() => setShowDriveConfigModal(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '680px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px', borderBottom: '1px solid var(--border-dim)', paddingBottom: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <CloudUpload color="var(--accent-green)" size={20} />
+                <h3 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0 }}>CONNECT GOOGLE DRIVE FOR AUTOMATIC AUDIO UPLOADS</h3>
+              </div>
+              <button onClick={() => setShowDriveConfigModal(false)} className="btn-icon" style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                ✕
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                setGoogleDriveWebhookUrl(driveWebhookInput.trim());
+                setSaveWebhookSuccess(true);
+                setTimeout(() => {
+                  setSaveWebhookSuccess(false);
+                  setShowDriveConfigModal(false);
+                }, 1200);
+              }}
+              style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <label style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--accent-cyan)' }}>
+                  GOOGLE APPS SCRIPT WEBHOOK URL
+                </label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="url"
+                    className="input-search"
+                    style={{ flex: 1, padding: '8px 12px', fontSize: '0.8rem', background: 'rgba(0,0,0,0.4)', borderRadius: '6px' }}
+                    placeholder="https://script.google.com/macros/s/.../exec"
+                    value={driveWebhookInput}
+                    onChange={(e) => setDriveWebhookInput(e.target.value)}
+                    required
+                  />
+                  <button type="submit" className="btn-transport btn-cyan" style={{ padding: '8px 16px', borderRadius: '6px' }}>
+                    {saveWebhookSuccess ? '✓ Saved!' : 'Save & Connect'}
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ background: 'rgba(0, 240, 255, 0.05)', border: '1px solid rgba(0, 240, 255, 0.2)', borderRadius: '8px', padding: '14px', fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                <div style={{ fontWeight: 700, color: '#fff', marginBottom: '8px' }}>
+                  📋 2-Minute Google Drive Webhook Setup Instructions:
+                </div>
+                <div><strong>Step 1:</strong> Go to <a href="https://script.google.com/" target="_blank" rel="noreferrer" style={{ color: 'var(--accent-green)', textDecoration: 'underline' }}>script.google.com</a> and click <strong>New project</strong>.</div>
+                <div><strong>Step 2:</strong> Copy the code below and paste it into the script editor.</div>
+                <div><strong>Step 3:</strong> Click <strong>Deploy</strong> → <strong>New deployment</strong> → Select type: <strong>Web app</strong>.</div>
+                <div><strong>Step 4:</strong> Set <em>"Execute as: Me"</em> and <em>"Who has access: Anyone"</em> → Click <strong>Deploy</strong>.</div>
+                <div><strong>Step 5:</strong> Copy your Web app URL, paste it into the box above, and click <strong>Save & Connect</strong>!</div>
+
+                <div style={{ marginTop: '10px', position: 'relative' }}>
+                  <button
+                    type="button"
+                    className="btn-transport btn-cyan"
+                    style={{ position: 'absolute', top: '8px', right: '8px', padding: '4px 10px', fontSize: '0.7rem' }}
+                    onClick={() => {
+                      navigator.clipboard.writeText(APPS_SCRIPT_TEMPLATE);
+                      setCopiedScript(true);
+                      setTimeout(() => setCopiedScript(false), 2500);
+                    }}
+                  >
+                    {copiedScript ? '✓ Copied Script!' : '📋 Copy Ready-to-Use Script'}
+                  </button>
+                  <pre style={{ background: '#05070c', padding: '12px', borderRadius: '6px', fontSize: '0.7rem', overflowX: 'auto', maxHeight: '140px', color: 'var(--accent-cyan)' }}>
+                    {APPS_SCRIPT_TEMPLATE}
+                  </pre>
+                </div>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 
