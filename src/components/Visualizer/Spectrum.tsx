@@ -20,7 +20,8 @@ export const Spectrum: React.FC<SpectrumProps> = ({ freqData }) => {
       const width = canvas.width;
       const height = canvas.height;
 
-      ctx.fillStyle = '#0a0e17';
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      ctx.fillStyle = isDark ? '#0a0e17' : '#ffffff';
       ctx.fillRect(0, 0, width, height);
 
       if (freqData && freqData.length > 0) {

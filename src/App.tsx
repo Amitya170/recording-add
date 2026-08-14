@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './auth/AuthContext';
+import { ThemeProvider } from './styles/ThemeContext';
 import { LoginPage } from './components/Auth/LoginPage';
 import { RegisterPage } from './components/Auth/RegisterPage';
 import { AdminPanel } from './components/Admin/AdminPanel';
@@ -69,10 +70,12 @@ const AppRouter: React.FC = () => {
 
 export const App: React.FC = () => {
   return (
-    <AuthProvider>
-      <AppRouter />
-      <ScrollControls />
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <AppRouter />
+        <ScrollControls />
+      </AuthProvider>
+    </ThemeProvider>
   );
 };
 

@@ -42,6 +42,7 @@ import { AudioMetadataModal } from './AudioMetadataModal';
 import { ExportModal } from '../Export/ExportModal';
 import { encodeWav } from '../../audio/encoders/WavEncoder';
 import { DriveUploadNotificationModal } from '../Modals/DriveUploadNotificationModal';
+import { ThemeToggle } from '../Common/ThemeToggle';
 
 import { getSessionAudioBlobs } from '../../auth/CloudAudioStore';
 import {
@@ -94,12 +95,33 @@ export const AdminPanel: React.FC = () => {
   } | null>(null);
 
   useEffect(() => {
-    // Estimate storage from session data
-    const estimateStorage = () => {
-      const totalSizeMb = sessions.reduce((acc, s) => acc + (s.fileSizeMb || 0), 0);
-      setStorageInfo({ usedMb: Number(totalSizeMb.toFixed(1)), limitMb: 5120 });
+    // Dynamically query browser IndexedDB storage quota
+    const checkStorageQuota = async () => {
+      let limitMb = 5120; // 5 GB baseline
+      let usedMb = Number(sessions.reduce((acc, s) => acc + (s.fileSizeMb || 0), 0).toFixed(1));
+
+      if (navigator.storage && navigator.storage.estimate) {
+        try {
+          const estimate = await navigator.storage.estimate();
+          if (estimate.quota) {
+            limitMb = Math.round(estimate.quota / (1024 * 1024));
+          }
+          if (estimate.usage) {
+            usedMb = Number((estimate.usage / (1024 * 1024)).toFixed(1));
+          }
+        } catch (e) {
+          console.warn('Storage estimate failed:', e);
+        }
+      }
+
+      if (navigator.storage && navigator.storage.persist) {
+        navigator.storage.persist().catch(() => {});
+      }
+
+      setStorageInfo({ usedMb, limitMb });
     };
-    estimateStorage();
+
+    checkStorageQuota();
   }, [sessions]);
 
   // Add Host Form
@@ -423,7 +445,8 @@ export const AdminPanel: React.FC = () => {
             <span className="daw-badge">ADMINISTRATOR ONLY</span>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <ThemeToggle />
             <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
               Logged in: <strong style={{ color: 'var(--accent-cyan)' }}>{currentUser?.name}</strong> ({currentUser?.email})
             </div>
@@ -479,96 +502,55 @@ export const AdminPanel: React.FC = () => {
           </div>
         </section>
 
-        {/* Studio Analytics Visual Charts & Health Monitor */}
-        <section style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px', marginBottom: '14px' }}>
-          {/* Chart 1: Studio Activity Bar Chart */}
-          <div className="card-panel" style={{ padding: '14px' }}>
-            <div className="card-header" style={{ marginBottom: '10px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <BarChart3 size={16} className="daw-logo-icon" />
-                <span>PODCAST RECORDING ACTIVITY TREND (DAILY DURATION)</span>
+        {/* Studio Health & Storage Monitor (Clean Streamlined Status Bar) */}
+        <section className="card-panel" style={{ padding: '14px 18px', marginBottom: '14px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '18px', alignItems: 'center' }}>
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontSize: '0.75rem' }}>
+                <span style={{ color: 'var(--text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <FileAudio size={14} color="var(--accent-cyan)" />
+                  IndexedDB Audio Storage:
+                </span>
+                <strong style={{ color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>
+                  {storageInfo.usedMb} MB / {(storageInfo.limitMb / 1024).toFixed(1)} GB Available
+                </strong>
               </div>
-              <span className="tag" style={{ background: 'rgba(0,240,255,0.15)', color: 'var(--accent-cyan)' }}>60FPS VECTOR CHART</span>
+              <div style={{ height: '5px', background: 'var(--bg-surface)', borderRadius: '3px', overflow: 'hidden', border: '1px solid var(--border-dim)' }}>
+                <div
+                  style={{
+                    width: `${Math.max(1, (storageInfo.usedMb / storageInfo.limitMb) * 100).toFixed(1)}%`,
+                    height: '100%',
+                    background: 'var(--accent-cyan)',
+                  }}
+                />
+              </div>
             </div>
 
-            <div style={{ height: '110px', width: '100%', position: 'relative' }}>
-              <svg width="100%" height="100%" viewBox="0 0 500 100" preserveAspectRatio="none">
-                <defs>
-                  <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#00f0ff" stopOpacity="0.8" />
-                    <stop offset="100%" stopColor="#00f0ff" stopOpacity="0.1" />
-                  </linearGradient>
-                </defs>
-                <line x1="0" y1="90" x2="500" y2="90" stroke="#1e293b" strokeWidth="1" />
-                <line x1="0" y1="50" x2="500" y2="50" stroke="#1e293b" strokeDasharray="3 3" strokeWidth="1" />
-                <line x1="0" y1="10" x2="500" y2="10" stroke="#1e293b" strokeDasharray="3 3" strokeWidth="1" />
-
-                {/* Vector Bar Chart Data */}
-                {[45, 60, 30, 85, 40, 95, 70, 55, 90, 65, 80, 100].map((h, idx) => {
-                  const x = 15 + idx * 40;
-                  const barH = (h / 100) * 80;
-                  const y = 90 - barH;
-                  return (
-                    <g key={idx}>
-                      <rect x={x} y={y} width="22" height={barH} rx="3" fill="url(#barGrad)" />
-                      <rect x={x} y={y} width="22" height="2" rx="1" fill="#00f0ff" />
-                    </g>
-                  );
-                })}
-              </svg>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginTop: '4px' }}>
-              <span>MON</span><span>TUE</span><span>WED</span><span>THU</span><span>FRI</span><span>SAT</span><span>SUN</span><span>MON</span><span>TUE</span><span>WED</span><span>THU</span><span>TODAY</span>
-            </div>
-          </div>
-
-          {/* Chart 2: Live Studio Health & Storage Monitor */}
-          <div className="card-panel" style={{ padding: '14px' }}>
-            <div className="card-header" style={{ marginBottom: '10px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <FileAudio size={16} className="daw-logo-icon" />
-                <span>STUDIO HEALTH & STORAGE</span>
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontSize: '0.75rem' }}>
+                <span style={{ color: 'var(--text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <CheckCircle size={14} color="var(--accent-green)" />
+                  P2P WebRTC Signaling:
+                </span>
+                <strong style={{ color: 'var(--accent-green)', fontFamily: 'var(--font-mono)' }}>ONLINE (STUN/ICE Active)</strong>
               </div>
-              <span className="tag">ONLINE</span>
+              <div style={{ height: '5px', background: 'var(--bg-surface)', borderRadius: '3px', overflow: 'hidden', border: '1px solid var(--border-dim)' }}>
+                <div style={{ width: '100%', height: '100%', background: 'var(--accent-green)' }} />
+              </div>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '0.75rem' }}>
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
-                  <span style={{ color: 'var(--text-secondary)' }}>IndexedDB Audio Storage:</span>
-                  <strong style={{ color: 'var(--accent-cyan)' }}>
-                    {storageInfo.usedMb} MB / {(storageInfo.limitMb / 1024).toFixed(0)} GB
-                  </strong>
-                </div>
-                <div style={{ height: '4px', background: '#090d14', borderRadius: '2px', overflow: 'hidden' }}>
-                  <div
-                    style={{
-                      width: `${Math.max(1, (storageInfo.usedMb / storageInfo.limitMb) * 100).toFixed(1)}%`,
-                      height: '100%',
-                      background: 'var(--accent-cyan)',
-                    }}
-                  />
-                </div>
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontSize: '0.75rem' }}>
+                <span style={{ color: 'var(--text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <CloudUpload size={14} color="#7c3aed" />
+                  Google Drive Cloud Sync:
+                </span>
+                <strong style={{ color: '#7c3aed', fontFamily: 'var(--font-mono)' }}>
+                  {autoUploadDrive ? 'AUTO-SYNC ACTIVE (Silent Upload)' : 'MANUAL'}
+                </strong>
               </div>
-
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
-                  <span style={{ color: 'var(--text-secondary)' }}>P2P WebRTC Signaling:</span>
-                  <strong style={{ color: 'var(--accent-green)' }}>ACTIVE (STUN/ICE)</strong>
-                </div>
-                <div style={{ height: '4px', background: '#090d14', borderRadius: '2px', overflow: 'hidden' }}>
-                  <div style={{ width: '100%', height: '100%', background: 'var(--accent-green)' }} />
-                </div>
-              </div>
-
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
-                  <span style={{ color: 'var(--text-secondary)' }}>DSP Engine Latency:</span>
-                  <strong style={{ color: '#c084fc' }}>&lt; 5 ms (Real-time)</strong>
-                </div>
-                <div style={{ height: '4px', background: '#090d14', borderRadius: '2px', overflow: 'hidden' }}>
-                  <div style={{ width: '95%', height: '100%', background: '#c084fc' }} />
-                </div>
+              <div style={{ height: '5px', background: 'var(--bg-surface)', borderRadius: '3px', overflow: 'hidden', border: '1px solid var(--border-dim)' }}>
+                <div style={{ width: '100%', height: '100%', background: '#7c3aed' }} />
               </div>
             </div>
           </div>

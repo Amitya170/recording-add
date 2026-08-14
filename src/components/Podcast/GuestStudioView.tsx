@@ -17,6 +17,7 @@ import { SpeakerPanel } from './SpeakerPanel';
 import { ShortcutsModal } from '../Modals/ShortcutsModal';
 import { FxRackModal } from '../Modals/FxRackModal';
 import { TranscriptPanel } from './TranscriptPanel';
+import { ThemeToggle } from '../Common/ThemeToggle';
 
 interface GuestStudioViewProps {
   guestNameParam?: string;
@@ -252,7 +253,9 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
           </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <ThemeToggle />
+
           <div className="header-status-pill" style={{ borderColor: webrtcStatus.connected ? 'rgba(0,255,135,0.4)' : 'var(--border-dim)' }}>
             <Activity size={13} color={webrtcStatus.connected ? 'var(--accent-green)' : 'var(--accent-amber)'} />
             <span>P2P CALL: {webrtcStatus.connected ? 'CONNECTED TO HOST LIVE' : webrtcStatus.statusText.toUpperCase()}</span>

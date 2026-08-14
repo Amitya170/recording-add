@@ -153,13 +153,14 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
 
     const width = effectiveWidth;
     const height = canvas.height;
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
 
     // Clear background
-    ctx.fillStyle = '#090d14';
+    ctx.fillStyle = isDark ? '#090d14' : '#ffffff';
     ctx.fillRect(0, 0, width, height);
 
     // Render Top Timeline Ruler Ticks
-    ctx.strokeStyle = '#334155';
+    ctx.strokeStyle = isDark ? '#334155' : '#cbd5e1';
     ctx.fillStyle = '#64748b';
     ctx.font = '500 9px JetBrains Mono, monospace';
     ctx.textAlign = 'left';
@@ -188,7 +189,7 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
 
     if (!audioBuffer) {
       // Empty Timeline visual
-      ctx.fillStyle = '#334155';
+      ctx.fillStyle = isDark ? '#334155' : '#94a3b8';
       ctx.font = '500 13px Inter, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(
@@ -211,21 +212,26 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
       color: string,
       trackLabel: string
     ) => {
-      // Metallic Gradient Track Background
+      // Gradient Track Background
       const bgGrad = ctx.createLinearGradient(0, yOffset, 0, yOffset + tHeight);
-      bgGrad.addColorStop(0, '#0e1420');
-      bgGrad.addColorStop(1, '#070a12');
+      if (isDark) {
+        bgGrad.addColorStop(0, '#0e1420');
+        bgGrad.addColorStop(1, '#070a12');
+      } else {
+        bgGrad.addColorStop(0, '#f8fafc');
+        bgGrad.addColorStop(1, '#f1f5f9');
+      }
       ctx.fillStyle = bgGrad;
       ctx.fillRect(0, yOffset, width, tHeight - 1);
 
-      // Neon Track Border
-      ctx.strokeStyle = '#1e293b';
+      // Track Border
+      ctx.strokeStyle = isDark ? '#1e293b' : '#e2e8f0';
       ctx.lineWidth = 1;
       ctx.strokeRect(0, yOffset, width, tHeight - 1);
 
       // Center Line
       const midY = yOffset + tHeight / 2;
-      ctx.strokeStyle = '#162032';
+      ctx.strokeStyle = isDark ? '#162032' : '#e2e8f0';
       ctx.beginPath();
       ctx.moveTo(0, midY);
       ctx.lineTo(width, midY);
@@ -239,12 +245,12 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
 
       if (!minPeaks || !maxPeaks) return;
 
-      // Waveform Peaks with Neon Glow & Vertical Gradients
+      // Waveform Peaks
       const amp = tHeight / 2.2;
 
       ctx.save();
-      ctx.shadowColor = color;
-      ctx.shadowBlur = 6;
+      ctx.shadowColor = isDark ? color : 'transparent';
+      ctx.shadowBlur = isDark ? 6 : 0;
       ctx.fillStyle = color;
 
       for (let i = 0; i < width; i++) {
@@ -257,15 +263,18 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
       ctx.restore();
     };
 
+    const cyanColor = isDark ? '#00f0ff' : '#0284c7';
+    const amberColor = isDark ? '#ffb700' : '#d97706';
+
     if (isDualTrack) {
       // Track 1: Speaker A / Channel L (Cyan)
-      drawTrackWaveform(peaksCacheRef.current.minA, peaksCacheRef.current.maxA, 0, trackHeight, '#00f0ff', 'TRACK 1: SPEAKER A (HOST) — LEFT CHANNEL');
+      drawTrackWaveform(peaksCacheRef.current.minA, peaksCacheRef.current.maxA, 0, trackHeight, cyanColor, 'TRACK 1: SPEAKER A (HOST) — LEFT CHANNEL');
 
       // Track 2: Speaker B / Channel R (Amber)
-      drawTrackWaveform(peaksCacheRef.current.minB, peaksCacheRef.current.maxB, trackHeight, trackHeight, '#ffb700', 'TRACK 2: SPEAKER B (GUEST) — RIGHT CHANNEL');
+      drawTrackWaveform(peaksCacheRef.current.minB, peaksCacheRef.current.maxB, trackHeight, trackHeight, amberColor, 'TRACK 2: SPEAKER B (GUEST) — RIGHT CHANNEL');
     } else {
       // Single Track Mode
-      drawTrackWaveform(peaksCacheRef.current.minMain, peaksCacheRef.current.maxMain, 0, height, '#00f0ff', 'TRACK 1: MONO RECORDING');
+      drawTrackWaveform(peaksCacheRef.current.minMain, peaksCacheRef.current.maxMain, 0, height, cyanColor, 'TRACK 1: MONO RECORDING');
     }
 
     // Draw Selection Highlight Overlay

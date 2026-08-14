@@ -42,6 +42,7 @@ import { ShortcutsModal } from '../Modals/ShortcutsModal';
 import { GuestInviteModal } from './GuestInviteModal';
 import { FxRackModal } from '../Modals/FxRackModal';
 import { TranscriptPanel } from './TranscriptPanel';
+import { ThemeToggle } from '../Common/ThemeToggle';
 import type { Marker } from '../Markers/MarkerList';
 import { MarkerList } from '../Markers/MarkerList';
 import { SoundboardPanel } from './SoundboardPanel';
@@ -891,7 +892,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         </div>
 
         {/* Global Connection & User Menu */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <ThemeToggle />
+
           <button
             className="btn-transport btn-cyan"
             onClick={() => setShowInviteModal(true)}

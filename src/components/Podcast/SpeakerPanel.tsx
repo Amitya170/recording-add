@@ -67,11 +67,12 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
       const w = canvas.width;
       const h = canvas.height;
 
-      ctx.fillStyle = '#090d14';
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      ctx.fillStyle = isDark ? '#090d14' : '#f8fafc';
       ctx.fillRect(0, 0, w, h);
 
       // Grid line
-      ctx.strokeStyle = '#151d2a';
+      ctx.strokeStyle = isDark ? '#151d2a' : '#e2e8f0';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(0, h / 2);
@@ -81,8 +82,8 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
       if (analysisData?.timeData && !isMuted && isConnected) {
         ctx.lineWidth = 2;
         ctx.strokeStyle = colorHex;
-        ctx.shadowColor = colorHex;
-        ctx.shadowBlur = 8;
+        ctx.shadowColor = isDark ? colorHex : 'transparent';
+        ctx.shadowBlur = isDark ? 8 : 0;
         ctx.beginPath();
 
         const data = analysisData.timeData;
@@ -98,7 +99,7 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
         ctx.shadowBlur = 0;
       } else {
         // Flat line when muted or disconnected
-        ctx.strokeStyle = isMuted ? 'rgba(255,42,95,0.4)' : '#232e42';
+        ctx.strokeStyle = isMuted ? 'rgba(225,29,72,0.4)' : (isDark ? '#232e42' : '#cbd5e1');
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(0, h / 2);
