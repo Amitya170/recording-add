@@ -26,6 +26,7 @@ export class SpeakerAudioEngine {
   private analyserEngine: AnalyserEngine | null = null;
   private gainNode: GainNode | null = null;
   private scriptNode: ScriptProcessorNode | null = null;
+  private silentSink: GainNode | null = null; // Tracks the silent sink to avoid duplicate connections
 
   private isRecording = false;
   private isPaused = false;
@@ -167,26 +168,46 @@ export class SpeakerAudioEngine {
 
     this.stream = stream;
 
-    if (this.sourceNode) this.sourceNode.disconnect();
+    // Disconnect previous source cleanly
+    if (this.sourceNode) {
+      try { this.sourceNode.disconnect(); } catch {}
+      this.sourceNode = null;
+    }
+
+    // Disconnect previous script node cleanly (avoids gain node double-connect noise)
+    if (this.scriptNode) {
+      try { this.scriptNode.disconnect(); } catch {}
+      this.scriptNode = null;
+    }
+    if (this.silentSink) {
+      try { this.silentSink.disconnect(); } catch {}
+      this.silentSink = null;
+    }
+
+    // Also disconnect gainNode from any old scriptNode connections
+    if (this.gainNode) {
+      try { this.gainNode.disconnect(this.analyserEngine!.node); } catch {}
+    }
+
     this.sourceNode = this.ctx.createMediaStreamSource(this.stream);
 
-    // Audio Graph: sourceNode -> noiseEngine -> fxRack -> gainNode -> analyserEngine
-    if (this.noiseEngine) {
-      this.sourceNode.connect(this.noiseEngine.inputNode);
-    } else if (this.fxRack) {
-      this.sourceNode.connect(this.fxRack.inputNode);
-    } else {
-      this.sourceNode.connect(this.gainNode!);
+    // For remote/incoming streams: bypass NoiseSuppressionEngine & FxRack entirely.
+    // Going through the noise gate on a compressed WebRTC stream causes noise artifacts.
+    // Audio Graph: sourceNode -> gainNode -> analyserEngine
+    this.sourceNode.connect(this.gainNode!);
+    this.gainNode!.connect(this.analyserEngine!.node);
+
+    // If monitoring (remote audio playback to speakers), connect gainNode to destination
+    if (this.monitorOutput) {
+      this.gainNode!.connect(this.ctx.destination);
     }
 
-    if (this.scriptNode) {
-      this.scriptNode.disconnect();
-    }
-    this.scriptNode = this.ctx.createScriptProcessor(2048, 1, 1);
+    // ScriptProcessor for PCM recording & metering
+    this.scriptNode = this.ctx.createScriptProcessor(4096, 1, 1);
     this.scriptNode.onaudioprocess = (e: AudioProcessingEvent) => {
       const rawInput = e.inputBuffer.getChannelData(0);
 
-      // Metering & recording with applied gain
+      // Metering & recording
       let peak = 0, sumSq = 0;
       const processed = new Float32Array(rawInput.length);
       for (let i = 0; i < rawInput.length; i++) {
@@ -207,14 +228,14 @@ export class SpeakerAudioEngine {
       }
     };
 
-    // Feed gain-adjusted signal to scriptNode for recording & visual metering
+    // Feed gain-adjusted signal to scriptNode for recording & metering
     this.gainNode!.connect(this.scriptNode);
 
-    // Keep scriptProcessor active without duplicate audio output
-    const silentSink = this.ctx.createGain();
-    silentSink.gain.value = 0;
-    this.scriptNode.connect(silentSink);
-    silentSink.connect(this.ctx.destination);
+    // Silent sink to keep ScriptProcessor alive (required by Web Audio API)
+    this.silentSink = this.ctx.createGain();
+    this.silentSink.gain.value = 0;
+    this.scriptNode.connect(this.silentSink);
+    this.silentSink.connect(this.ctx.destination);
   }
 
   public setNoiseSuppression(enabled: boolean): void {

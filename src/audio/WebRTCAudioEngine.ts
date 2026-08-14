@@ -172,15 +172,18 @@ export class WebRTCAudioEngine {
       }
     };
 
-    this.peerConnection = pc;
-
-    // Attach local stream tracks if available
+    // Add a sendrecv transceiver so SDP always negotiates bidirectional audio.
+    // This must happen BEFORE createOffer/createAnswer so the SDP includes it.
+    // If a local stream is already available, we set its track on the transceiver immediately.
+    const transceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
     if (this.localStream) {
-      this.localStream.getTracks().forEach((track) => {
-        pc.addTrack(track, this.localStream!);
-      });
+      const audioTrack = this.localStream.getAudioTracks()[0];
+      if (audioTrack) {
+        transceiver.sender.replaceTrack(audioTrack).catch(console.warn);
+      }
     }
 
+    this.peerConnection = pc;
     return pc;
   }
 
@@ -203,18 +206,28 @@ export class WebRTCAudioEngine {
     const pc = this.peerConnection || this.setupPeerConnection();
 
     const audioTrack = stream.getAudioTracks()[0];
-    if (!audioTrack) return;
-
-    const senders = pc.getSenders();
-    const audioSender = senders.find((s) => (s.track ? s.track.kind === 'audio' : true));
-
-    if (audioSender) {
-      await audioSender.replaceTrack(audioTrack);
-    } else {
-      pc.addTrack(audioTrack, stream);
+    if (!audioTrack) {
+      console.warn('setLocalStream: No audio track found in stream');
+      return;
     }
 
-    // If already connected and role is host, trigger offer renegotiation
+    // Use the transceiver sender for the most reliable track replacement
+    const transceivers = pc.getTransceivers();
+    const audioTransceiver = transceivers.find((t) => t.sender.track?.kind === 'audio' || t.receiver.track?.kind === 'audio');
+    if (audioTransceiver) {
+      try {
+        await audioTransceiver.sender.replaceTrack(audioTrack);
+        console.log(`[WebRTC] ${this.role} local track replaced via transceiver`);
+      } catch (e) {
+        console.warn('replaceTrack via transceiver failed, using addTrack:', e);
+        try { pc.addTrack(audioTrack, stream); } catch {}
+      }
+    } else {
+      // Fallback: add track directly (less ideal but functional)
+      try { pc.addTrack(audioTrack, stream); } catch {}
+    }
+
+    // If host is already in stable state, renegotiate
     if (this.role === 'host' && pc.signalingState === 'stable') {
       await this.createOffer();
     }
@@ -256,16 +269,18 @@ export class WebRTCAudioEngine {
   private async handleOffer(offerSDP: RTCSessionDescriptionInit) {
     const pc = this.peerConnection || this.setupPeerConnection();
     try {
-      // Ensure local tracks are attached before creating answer
+      // Attach local track via transceiver sender BEFORE setting remote description
       if (this.localStream) {
         const audioTrack = this.localStream.getAudioTracks()[0];
         if (audioTrack) {
-          const senders = pc.getSenders();
-          const audioSender = senders.find((s) => (s.track ? s.track.kind === 'audio' : true));
-          if (audioSender) {
-            await audioSender.replaceTrack(audioTrack);
+          const transceivers = pc.getTransceivers();
+          const audioTransceiver = transceivers.find(
+            (t) => t.sender.track?.kind === 'audio' || t.receiver.track?.kind === 'audio'
+          );
+          if (audioTransceiver) {
+            await audioTransceiver.sender.replaceTrack(audioTrack).catch(console.warn);
           } else {
-            pc.addTrack(audioTrack, this.localStream);
+            try { pc.addTrack(audioTrack, this.localStream); } catch {}
           }
         }
       }

@@ -168,9 +168,10 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
   // Initialize Engines
   useEffect(() => {
-    // Host mic: no self monitor (false), Guest incoming: monitor to speakers (true)
+    // Host mic: no self monitor. Guest incoming: monitorOutput=false because we use
+    // the audio element for playback (prevents double audio path causing noise/echo).
     const eA = new SpeakerAudioEngine('Speaker A (Host)', false);
-    const eB = new SpeakerAudioEngine('Speaker B (Guest)', true);
+    const eB = new SpeakerAudioEngine('Speaker B (Guest)', false);
     engineA.current = eA;
     engineB.current = eB;
 
@@ -213,20 +214,20 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       }
     };
     rEngine.onRemoteStream = async (remoteStream) => {
-      // Connect remote guest stream into engineB for waveform visualizer, monitoring & recording
+      // PRIMARY playback path: audio element (most reliable, lowest latency)
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.srcObject = remoteStream;
+        remoteAudioRef.current.volume = 1.0;
+        remoteAudioRef.current.muted = false;
+        remoteAudioRef.current.play().catch((e) => console.warn('Autoplay error:', e));
+      }
+      // SECONDARY path: engine for waveform visualizer & PCM recording only (no speaker output)
       if (engineB.current) {
         await engineB.current.startMediaStream(remoteStream);
         setIsConnectedB(true);
         if (isRecordingRef.current) {
           engineB.current.startRecording();
         }
-      }
-      // Audio element fallback for browsers with autoplay restrictions
-      if (remoteAudioRef.current) {
-        remoteAudioRef.current.srcObject = remoteStream;
-        remoteAudioRef.current.volume = 1.0;
-        remoteAudioRef.current.muted = false;
-        remoteAudioRef.current.play().catch((e) => console.warn('Autoplay error:', e));
       }
     };
     webrtcEngine.current = rEngine;
@@ -927,7 +928,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         ref={remoteAudioRef}
         autoPlay
         playsInline
-        style={{ position: 'fixed', top: '-9999px', left: '-9999px', width: '1px', height: '1px', opacity: 0.001, pointerEvents: 'none' }}
+        style={{ display: 'none' }}
       />
 
       {/* Real-Time Google Drive Upload Progress Banner */}

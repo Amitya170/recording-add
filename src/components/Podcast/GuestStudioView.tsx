@@ -81,9 +81,10 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
 
   // Initialize Guest Engine & WebRTC
   useEffect(() => {
-    // Guest own mic: monitor false, Host incoming voice: monitor true (play to speakers)
+    // Guest own mic: no monitor. Host incoming: monitorOutput=false because we use
+    // the audio element for playback (prevents double audio path causing noise/echo).
     const engine = new SpeakerAudioEngine('Guest Speaker', false);
-    const eHost = new SpeakerAudioEngine('Host Speaker (Incoming)', true);
+    const eHost = new SpeakerAudioEngine('Host Speaker (Incoming)', false);
     engineGuest.current = engine;
     engineHostIncoming.current = eHost;
 
@@ -120,16 +121,16 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     const rEngine = new WebRTCAudioEngine('guest', sessionToken || 'podcast_main_session');
     rEngine.onStatusChange = (st) => setWebrtcStatus(st);
     rEngine.onRemoteStream = async (remoteStream) => {
-      // Connect incoming Host audio stream to eHost for live speaker playback
-      if (engineHostIncoming.current) {
-        await engineHostIncoming.current.startMediaStream(remoteStream);
-      }
-      // Audio element fallback
+      // PRIMARY playback path: audio element for reliable cross-browser playback
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
         remoteAudioRef.current.volume = 1.0;
         remoteAudioRef.current.muted = false;
         remoteAudioRef.current.play().catch((e) => console.warn('Guest autoplay prevented:', e));
+      }
+      // SECONDARY: connect to engine for waveform metering only (no speaker output)
+      if (engineHostIncoming.current) {
+        await engineHostIncoming.current.startMediaStream(remoteStream);
       }
     };
     rEngine.onSignal = (sig) => {
@@ -326,7 +327,7 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
         ref={remoteAudioRef}
         autoPlay
         playsInline
-        style={{ position: 'fixed', top: '-9999px', left: '-9999px', width: '1px', height: '1px', opacity: 0.001, pointerEvents: 'none' }}
+        style={{ display: 'none' }}
       />
 
       {/* Modals */}
