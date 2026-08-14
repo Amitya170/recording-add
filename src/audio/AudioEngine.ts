@@ -7,6 +7,7 @@
 import { AnalyserEngine, type AnalysisData } from './AnalyserEngine';
 import { createAudioBufferFromPCM } from './AudioBufferUtils';
 import { FxRackEngine, DEFAULT_FX_CONFIG, type FxConfig } from './FxRackEngine';
+import { NoiseSuppressionEngine } from './NoiseSuppressionEngine';
 
 export interface DeviceInfo {
   deviceId: string;
@@ -33,6 +34,7 @@ export class SpeakerAudioEngine {
   private isMuted = false;
   private userGain = 1.0; // 0.0 to 2.0
 
+  public noiseEngine: NoiseSuppressionEngine | null = null;
   public fxRack: FxRackEngine | null = null;
   public fxConfig: FxConfig = { ...DEFAULT_FX_CONFIG };
 
@@ -52,11 +54,14 @@ export class SpeakerAudioEngine {
       if (this.ctx.state === 'suspended') await this.ctx.resume();
     }
 
+    this.noiseEngine = new NoiseSuppressionEngine(this.ctx);
     this.fxRack = new FxRackEngine(this.ctx);
     this.analyserEngine = new AnalyserEngine(this.ctx, 2048);
     this.gainNode = this.ctx.createGain();
     this.gainNode.gain.value = this.userGain;
 
+    // Chain: NoiseSuppression -> FxRack -> GainNode -> AnalyserEngine
+    this.noiseEngine.outputNode.connect(this.fxRack.inputNode);
     this.fxRack.outputNode.connect(this.gainNode);
     this.gainNode.connect(this.analyserEngine.node);
     return this.ctx;
@@ -120,7 +125,9 @@ export class SpeakerAudioEngine {
       }
     };
 
-    if (this.fxRack) {
+    if (this.noiseEngine) {
+      this.sourceNode.connect(this.noiseEngine.inputNode);
+    } else if (this.fxRack) {
       this.sourceNode.connect(this.fxRack.inputNode);
     } else {
       this.sourceNode.connect(this.gainNode!);
@@ -171,13 +178,28 @@ export class SpeakerAudioEngine {
       }
     };
 
-    if (this.fxRack) {
+    if (this.noiseEngine) {
+      this.sourceNode.connect(this.noiseEngine.inputNode);
+    } else if (this.fxRack) {
       this.sourceNode.connect(this.fxRack.inputNode);
     } else {
       this.sourceNode.connect(this.gainNode!);
     }
     this.sourceNode.connect(this.scriptNode);
     this.scriptNode.connect(this.ctx.destination);
+  }
+
+  public setNoiseSuppression(enabled: boolean): void {
+    if (this.noiseEngine) {
+      this.noiseEngine.setEnabled(enabled);
+    }
+  }
+
+  public applyVocalPreset(presetKey: string): FxConfig {
+    if (this.fxRack) {
+      this.fxConfig = this.fxRack.applyPreset(presetKey);
+    }
+    return this.fxConfig;
   }
 
   public updateFxConfig(config: FxConfig): void {

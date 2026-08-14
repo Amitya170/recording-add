@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Crop,
   Volume2,
@@ -8,14 +8,18 @@ import {
   BookmarkPlus,
   Play,
   Pause,
-  Sparkles
+  Sparkles,
+  Undo2,
+  Redo2,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import {
   sliceAudioBuffer,
   normalizeAudioBuffer,
   applyFade,
   reverseAudioBuffer,
-  removeSilence
+  removeSilence,
 } from '../../audio/AudioBufferUtils';
 
 interface WaveformEditorProps {
@@ -25,6 +29,12 @@ interface WaveformEditorProps {
   onBufferUpdate: (newBuffer: AudioBuffer) => void;
   onSpeakerBuffersUpdate?: (a: AudioBuffer | null, b: AudioBuffer | null) => void;
   onAddMarker: (time: number) => void;
+}
+
+interface HistoryEntry {
+  audioBuffer: AudioBuffer;
+  speakerABuffer: AudioBuffer | null;
+  speakerBBuffer: AudioBuffer | null;
 }
 
 export const WaveformEditor: React.FC<WaveformEditorProps> = ({
@@ -37,12 +47,19 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const scrollWrapperRef = useRef<HTMLDivElement | null>(null);
 
   const [selection, setSelection] = useState<{ start: number; end: number } | null>(null);
   const [isSelecting, setIsSelecting] = useState<boolean>(false);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
-  const [canvasWidth, setCanvasWidth] = useState<number>(800);
+  const [baseWidth, setBaseWidth] = useState<number>(800);
+  const [zoom, setZoom] = useState<number>(1.0); // 1.0 to 8.0x
+
+  const [undoStack, setUndoStack] = useState<HistoryEntry[]>([]);
+  const [redoStack, setRedoStack] = useState<HistoryEntry[]>([]);
+
+  const effectiveWidth = Math.max(200, Math.round(baseWidth * zoom));
 
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const playStartTimeRef = useRef<number>(0);
@@ -75,7 +92,7 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !audioBuffer) return;
-    const width = canvas.width;
+    const width = effectiveWidth;
     
     const downsample = (buffer: AudioBuffer | null, channelIndex: number): { min: Float32Array, max: Float32Array } | null => {
       if (!buffer || channelIndex >= buffer.numberOfChannels) return null;
@@ -110,16 +127,16 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
       minMain: dsMain ? dsMain.min : null, maxMain: dsMain ? dsMain.max : null,
       width
     };
-  }, [audioBuffer, speakerABuffer, speakerBBuffer, canvasWidth]);
+  }, [audioBuffer, speakerABuffer, speakerBBuffer, effectiveWidth]);
 
   const duration = audioBuffer ? audioBuffer.duration : 0;
 
-  // Auto-resize canvas to match container width smoothly
+  // Auto-resize base width to match container width smoothly
   useEffect(() => {
     const updateWidth = () => {
       if (containerRef.current) {
         const w = containerRef.current.clientWidth - 28; // minus padding
-        if (w > 200) setCanvasWidth(w);
+        if (w > 200) setBaseWidth(w);
       }
     };
     updateWidth();
@@ -134,7 +151,7 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const width = canvas.width;
+    const width = effectiveWidth;
     const height = canvas.height;
 
     // Clear background
@@ -147,14 +164,17 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
     ctx.font = '500 9px JetBrains Mono, monospace';
     ctx.textAlign = 'left';
 
-    const tickCount = 10;
+    const tickCount = Math.max(10, Math.round(10 * zoom));
     const step = width / tickCount;
     for (let i = 0; i <= tickCount; i++) {
       const tickX = i * step;
       const tickTime = (i / tickCount) * (duration || 60);
       const m = Math.floor(tickTime / 60);
       const s = Math.floor(tickTime % 60);
-      const label = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+      const cs = Math.floor((tickTime % 1) * 10);
+      const label = zoom > 2
+        ? `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${cs}`
+        : `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 
       ctx.beginPath();
       ctx.moveTo(tickX, 0);
@@ -290,14 +310,16 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
       ctx.fill();
       ctx.restore();
     }
-  }, [audioBuffer, speakerABuffer, speakerBBuffer, selection, currentTime, duration, canvasWidth]);
+  }, [audioBuffer, speakerABuffer, speakerBBuffer, selection, currentTime, duration, effectiveWidth, zoom]);
 
   // Handle Playback
   const togglePlay = () => {
     if (!audioBuffer) return;
 
     if (isPlaying) {
-      if (audioSourceRef.current) audioSourceRef.current.stop();
+      if (audioSourceRef.current) {
+        try { audioSourceRef.current.stop(); } catch { /* ignore */ }
+      }
       setIsPlaying(false);
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     } else {
@@ -333,7 +355,7 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
     if (!canvasRef.current || !duration) return;
     const rect = canvasRef.current.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
-    const clickedTime = (clickX / rect.width) * duration;
+    const clickedTime = Math.max(0, Math.min(duration, (clickX / rect.width) * duration));
 
     setCurrentTime(clickedTime);
     setSelection({ start: clickedTime, end: clickedTime });
@@ -359,9 +381,88 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
     }
   };
 
-  // DSP Actions
+  // History Helper: Push current state to undoStack
+  const pushHistoryState = useCallback(() => {
+    if (!audioBuffer) return;
+    setUndoStack((prev) => [
+      ...prev.slice(-19), // keep max 20 states
+      {
+        audioBuffer,
+        speakerABuffer: speakerABuffer || null,
+        speakerBBuffer: speakerBBuffer || null,
+      },
+    ]);
+    setRedoStack([]);
+  }, [audioBuffer, speakerABuffer, speakerBBuffer]);
+
+  // Undo & Redo Handlers
+  const handleUndo = useCallback(() => {
+    if (undoStack.length === 0 || !audioBuffer) return;
+    const last = undoStack[undoStack.length - 1];
+    setUndoStack((prev) => prev.slice(0, -1));
+    setRedoStack((prev) => [
+      ...prev,
+      {
+        audioBuffer,
+        speakerABuffer: speakerABuffer || null,
+        speakerBBuffer: speakerBBuffer || null,
+      },
+    ]);
+
+    onBufferUpdate(last.audioBuffer);
+    if (onSpeakerBuffersUpdate) {
+      onSpeakerBuffersUpdate(last.speakerABuffer, last.speakerBBuffer);
+    }
+    setSelection(null);
+  }, [undoStack, audioBuffer, speakerABuffer, speakerBBuffer, onBufferUpdate, onSpeakerBuffersUpdate]);
+
+  const handleRedo = useCallback(() => {
+    if (redoStack.length === 0 || !audioBuffer) return;
+    const next = redoStack[redoStack.length - 1];
+    setRedoStack((prev) => prev.slice(0, -1));
+    setUndoStack((prev) => [
+      ...prev,
+      {
+        audioBuffer,
+        speakerABuffer: speakerABuffer || null,
+        speakerBBuffer: speakerBBuffer || null,
+      },
+    ]);
+
+    onBufferUpdate(next.audioBuffer);
+    if (onSpeakerBuffersUpdate) {
+      onSpeakerBuffersUpdate(next.speakerABuffer, next.speakerBBuffer);
+    }
+    setSelection(null);
+  }, [redoStack, audioBuffer, speakerABuffer, speakerBBuffer, onBufferUpdate, onSpeakerBuffersUpdate]);
+
+  // Keyboard Shortcuts for Undo/Redo (Ctrl+Z / Ctrl+Y)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isCtrlOrMeta = e.ctrlKey || e.metaKey;
+      if (!isCtrlOrMeta) return;
+
+      if (e.key === 'z' || e.key === 'Z') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          handleRedo();
+        } else {
+          handleUndo();
+        }
+      } else if (e.key === 'y' || e.key === 'Y') {
+        e.preventDefault();
+        handleRedo();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleUndo, handleRedo]);
+
+  // DSP Actions with Undo State Capture
   const handleTrim = () => {
     if (!audioBuffer || !selection || selection.end <= selection.start) return;
+    pushHistoryState();
     const ctx = getEditCtx();
     const trimmed = sliceAudioBuffer(ctx, audioBuffer, selection.start, selection.end);
     onBufferUpdate(trimmed);
@@ -376,6 +477,7 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
 
   const handleNormalize = () => {
     if (!audioBuffer) return;
+    pushHistoryState();
     const ctx = getEditCtx();
     const normalized = normalizeAudioBuffer(ctx, audioBuffer, -1.0);
     onBufferUpdate(normalized);
@@ -388,6 +490,7 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
 
   const handleFade = () => {
     if (!audioBuffer) return;
+    pushHistoryState();
     const ctx = getEditCtx();
     const faded = applyFade(ctx, audioBuffer, 0.5, 0.5);
     onBufferUpdate(faded);
@@ -400,6 +503,7 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
 
   const handleReverse = () => {
     if (!audioBuffer) return;
+    pushHistoryState();
     const ctx = getEditCtx();
     const reversed = reverseAudioBuffer(ctx, audioBuffer);
     onBufferUpdate(reversed);
@@ -412,6 +516,7 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
 
   const handleRemoveSilence = () => {
     if (!audioBuffer) return;
+    pushHistoryState();
     const ctx = getEditCtx();
     const cleaned = removeSilence(ctx, audioBuffer, -42, 0.3);
     onBufferUpdate(cleaned);
@@ -424,6 +529,7 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
 
   const handleMastering = () => {
     if (!audioBuffer) return;
+    pushHistoryState();
     const ctx = getEditCtx();
     const mastered = normalizeAudioBuffer(ctx, audioBuffer, -0.5);
     onBufferUpdate(mastered);
@@ -436,27 +542,81 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
 
   return (
     <div className="card-panel editor-section" ref={containerRef}>
-      <div className="card-header">
+      <div className="card-header" style={{ flexWrap: 'wrap', gap: '8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Sliders size={16} className="daw-logo-icon" />
           <span>MULTI-TRACK PODCAST WAVEFORM TIMELINE</span>
         </div>
-        <span className="tag">
-          {duration > 0 ? `${duration.toFixed(2)}s | 2 TRACKS` : 'IDLE'}
-        </span>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {/* Undo / Redo Buttons */}
+          <div style={{ display: 'flex', gap: '4px' }}>
+            <button
+              className="btn-transport"
+              onClick={handleUndo}
+              disabled={undoStack.length === 0}
+              title="Undo Last Edit (Ctrl+Z)"
+              style={{ padding: '2px 8px', height: '26px', fontSize: '0.7rem' }}
+            >
+              <Undo2 size={12} /> Undo
+            </button>
+            <button
+              className="btn-transport"
+              onClick={handleRedo}
+              disabled={redoStack.length === 0}
+              title="Redo (Ctrl+Y)"
+              style={{ padding: '2px 8px', height: '26px', fontSize: '0.7rem' }}
+            >
+              <Redo2 size={12} /> Redo
+            </button>
+          </div>
+
+          {/* Timeline Zoom Slider */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+            <ZoomOut
+              size={13}
+              style={{ cursor: 'pointer' }}
+              onClick={() => setZoom((z) => Math.max(1, Number((z - 0.5).toFixed(1))))}
+            />
+            <input
+              type="range"
+              min="1"
+              max="8"
+              step="0.5"
+              value={zoom}
+              onChange={(e) => setZoom(parseFloat(e.target.value))}
+              style={{ width: '60px', height: '4px' }}
+              title={`Timeline Zoom: ${zoom}x`}
+            />
+            <ZoomIn
+              size={13}
+              style={{ cursor: 'pointer' }}
+              onClick={() => setZoom((z) => Math.min(8, Number((z + 0.5).toFixed(1))))}
+            />
+            <span style={{ fontFamily: 'var(--font-mono)', minWidth: '24px' }}>{zoom}x</span>
+          </div>
+
+          <span className="tag">
+            {duration > 0 ? `${duration.toFixed(2)}s | 2 TRACKS` : 'IDLE'}
+          </span>
+        </div>
       </div>
 
-      {/* Fluid Resizing Canvas */}
-      <div className="canvas-wrapper" style={{ flex: 1, minHeight: '170px', margin: '6px 0' }}>
+      {/* Fluid Resizing Canvas with Horizontal Scroll for Zoom */}
+      <div
+        ref={scrollWrapperRef}
+        className="canvas-wrapper"
+        style={{ flex: 1, minHeight: '170px', margin: '6px 0', overflowX: 'auto', overflowY: 'hidden' }}
+      >
         <canvas
           ref={canvasRef}
           className="visualizer-canvas"
-          width={canvasWidth}
+          width={effectiveWidth}
           height={180}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
-          style={{ cursor: 'crosshair', width: '100%', height: '100%' }}
+          style={{ cursor: 'crosshair', width: `${effectiveWidth}px`, height: '180px', display: 'block' }}
         />
       </div>
 

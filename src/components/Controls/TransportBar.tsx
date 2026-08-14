@@ -25,13 +25,15 @@ export const TransportBar: React.FC<TransportBarProps> = ({
   hasAudio,
 }) => {
   const [elapsedMs, setElapsedMs] = useState<number>(0);
+  const elapsedRef = React.useRef(0);
 
   useEffect(() => {
-    let interval: any;
+    let interval: ReturnType<typeof setInterval>;
     if (isRecording && !isPaused) {
-      const startTime = Date.now() - elapsedMs;
+      const startTime = Date.now() - elapsedRef.current;
       interval = setInterval(() => {
-        setElapsedMs(Date.now() - startTime);
+        elapsedRef.current = Date.now() - startTime;
+        setElapsedMs(elapsedRef.current);
       }, 50);
     }
     return () => clearInterval(interval);
@@ -48,11 +50,18 @@ export const TransportBar: React.FC<TransportBarProps> = ({
 
   const handleRecordClick = () => {
     if (!isRecording) {
+      elapsedRef.current = 0;
       setElapsedMs(0);
       onStartRecord();
     } else {
       onStopRecord();
     }
+  };
+
+  const handleClearClick = () => {
+    elapsedRef.current = 0;
+    setElapsedMs(0);
+    onClear();
   };
 
   return (
@@ -81,7 +90,7 @@ export const TransportBar: React.FC<TransportBarProps> = ({
         )}
 
         {hasAudio && !isRecording && (
-          <button className="btn-transport" onClick={onClear} title="Discard Recording">
+          <button className="btn-transport" onClick={handleClearClick} title="Discard Recording">
             <Trash2 size={16} /> Discard
           </button>
         )}

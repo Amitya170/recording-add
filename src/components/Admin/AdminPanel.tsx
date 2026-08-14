@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../../auth/AuthContext';
 import {
   getAnalyticsSummary,
@@ -8,6 +8,7 @@ import {
   createAudioBuffersForSession,
   generateCombinedMetadataJSON,
   generateCombinedMetadataTXT,
+  generateSessionsCSV,
   type RecordingSession,
   type UserDurationReport,
 } from '../../auth/SessionStore';
@@ -25,9 +26,14 @@ import {
   FileAudio,
   FileCode,
   Download,
+  FileSpreadsheet,
+  Search,
+  Play,
+  Pause,
 } from 'lucide-react';
 import { AudioMetadataModal } from './AudioMetadataModal';
 import { ExportModal } from '../Export/ExportModal';
+import { encodeWav } from '../../audio/encoders/WavEncoder';
 
 import { getSessionAudioBlobs } from '../../auth/CloudAudioStore';
 
@@ -36,6 +42,8 @@ export const AdminPanel: React.FC = () => {
 
   const [userReports, setUserReports] = useState<UserDurationReport[]>([]);
   const [sessions, setSessions] = useState<RecordingSession[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterFormat, setFilterFormat] = useState('all');
   const [summary, setSummary] = useState({
     totalUsers: 0,
     totalSessions: 0,
@@ -44,6 +52,9 @@ export const AdminPanel: React.FC = () => {
   });
 
   const [storageInfo, setStorageInfo] = useState({ usedMb: 0, limitMb: 5120 });
+  const [previewingSessionId, setPreviewingSessionId] = useState<string | null>(null);
+  const [previewAudioUrl, setPreviewAudioUrl] = useState<string | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     // Estimate storage from session data
@@ -111,6 +122,37 @@ export const AdminPanel: React.FC = () => {
     });
   };
 
+  const handleTogglePreviewAudio = async (session: RecordingSession) => {
+    if (previewingSessionId === session.id) {
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+      }
+      setPreviewingSessionId(null);
+      return;
+    }
+
+    const stored = await getSessionAudioBlobs(session.id);
+    if (stored && stored.stereoBlob) {
+      if (previewAudioUrl) URL.revokeObjectURL(previewAudioUrl);
+      const url = URL.createObjectURL(stored.stereoBlob);
+      setPreviewAudioUrl(url);
+      setPreviewingSessionId(session.id);
+      setTimeout(() => {
+        previewAudioRef.current?.play().catch((e) => console.warn('Audio audition error:', e));
+      }, 50);
+    } else {
+      const bufs = createAudioBuffersForSession(session);
+      const blob = encodeWav(bufs.audioBuffer, 16);
+      if (previewAudioUrl) URL.revokeObjectURL(previewAudioUrl);
+      const url = URL.createObjectURL(blob);
+      setPreviewAudioUrl(url);
+      setPreviewingSessionId(session.id);
+      setTimeout(() => {
+        previewAudioRef.current?.play().catch((e) => console.warn('Audio audition error:', e));
+      }, 50);
+    }
+  };
+
   const handleExportCombinedJSON = () => {
     const jsonStr = generateCombinedMetadataJSON(sessions, summary.totalUsers);
     const blob = new Blob([jsonStr], { type: 'application/json' });
@@ -141,18 +183,33 @@ export const AdminPanel: React.FC = () => {
     }, 100);
   };
 
-  const refreshData = () => {
+  const handleExportCombinedCSV = () => {
+    const csvStr = generateSessionsCSV(sessions);
+    const blob = new Blob([csvStr], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Studio_Sessions_${Date.now()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 100);
+  };
+
+  const refreshData = useCallback(() => {
     const allUsers = getAllUsers();
     const reports = getUserDurationReports(allUsers);
     setUserReports(reports);
     const sess = getStoredSessions();
     setSessions(sess);
     setSummary(getAnalyticsSummary(allUsers.length));
-  };
+  }, [getAllUsers]);
 
   useEffect(() => {
     refreshData();
-  }, []);
+  }, [refreshData]);
 
   const handleCreateHost = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -430,22 +487,30 @@ export const AdminPanel: React.FC = () => {
 
             {/* Session History Logs */}
             <div className="card-panel" style={{ flex: 1, minHeight: 0 }}>
-              <div className="card-header">
+              <div className="card-header" style={{ flexWrap: 'wrap', gap: '8px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <FileAudio size={16} className="daw-logo-icon" />
                   <span>RECORDED SESSION LOGS & METRICS</span>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                   <span className="tag">{sessions.length} SESSIONS LOGGED</span>
                   {sessions.length > 0 && (
                     <>
                       <button
                         className="btn-transport btn-cyan"
                         style={{ padding: '4px 8px', height: '24px', fontSize: '0.68rem' }}
+                        onClick={handleExportCombinedCSV}
+                        title="Export All Sessions as Spreadsheet CSV"
+                      >
+                        <FileSpreadsheet size={12} style={{ marginRight: '4px' }} /> Export CSV
+                      </button>
+                      <button
+                        className="btn-transport btn-cyan"
+                        style={{ padding: '4px 8px', height: '24px', fontSize: '0.68rem' }}
                         onClick={handleExportCombinedJSON}
                         title="Export Combined Technical Metadata for All Sessions as JSON"
                       >
-                        <FileCode size={12} style={{ marginRight: '4px' }} /> Combined Meta (JSON)
+                        <FileCode size={12} style={{ marginRight: '4px' }} /> Meta (JSON)
                       </button>
                       <button
                         className="btn-transport"
@@ -453,12 +518,38 @@ export const AdminPanel: React.FC = () => {
                         onClick={handleExportCombinedTXT}
                         title="Export Aggregated Text Report for All Sessions"
                       >
-                        <Download size={12} style={{ marginRight: '4px' }} /> All Report (.TXT)
+                        <Download size={12} style={{ marginRight: '4px' }} /> Report (.TXT)
                       </button>
                     </>
                   )}
                 </div>
               </div>
+
+              {/* Search & Filter Bar */}
+              {sessions.length > 0 && (
+                <div style={{ display: 'flex', gap: '8px', padding: '8px 12px', background: 'var(--bg-darker)', borderBottom: '1px solid var(--border-dim)', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1, background: '#090d14', borderRadius: '4px', padding: '0 8px', border: '1px solid var(--border-dim)' }}>
+                    <Search size={13} color="var(--text-muted)" />
+                    <input
+                      className="daw-input"
+                      style={{ border: 'none', background: 'transparent', padding: '4px 0', fontSize: '0.75rem', height: '28px' }}
+                      placeholder="Filter sessions by title, host, guest or email..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                    />
+                  </div>
+                  <select
+                    className="daw-select"
+                    style={{ width: '130px', height: '28px', fontSize: '0.72rem', padding: '2px 6px' }}
+                    value={filterFormat}
+                    onChange={(e) => setFilterFormat(e.target.value)}
+                  >
+                    <option value="all">All Formats</option>
+                    <option value="wav">WAV Formats</option>
+                    <option value="float">32-Bit Float</option>
+                  </select>
+                </div>
+              )}
 
               <div className="admin-table-wrap">
                 {sessions.length === 0 ? (
@@ -469,6 +560,7 @@ export const AdminPanel: React.FC = () => {
                   <table className="admin-table">
                     <thead>
                       <tr>
+                        <th>PREVIEW</th>
                         <th>SESSION TITLE</th>
                         <th>HOST SPEAKER</th>
                         <th>GUEST SPEAKER</th>
@@ -479,42 +571,63 @@ export const AdminPanel: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {sessions.map((s) => (
-                        <tr key={s.id}>
-                          <td style={{ fontWeight: 600 }}>{s.title}</td>
-                          <td>{s.hostName}</td>
-                          <td style={{ color: 'var(--accent-amber)' }}>{s.guestName}</td>
-                          <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)', fontWeight: 700 }}>
-                            {formatDuration(s.durationSeconds)}
-                          </td>
-                          <td style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                            {new Date(s.createdAt).toLocaleString()}
-                          </td>
-                          <td style={{ fontSize: '0.7rem' }}>
-                            <span className="daw-badge">{s.format}</span>
-                          </td>
-                          <td>
-                            <div style={{ display: 'flex', gap: '6px' }}>
+                      {sessions
+                        .filter((s) => {
+                          const matchesQuery =
+                            !searchQuery ||
+                            s.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                            s.hostName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                            s.guestName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                            s.hostEmail.toLowerCase().includes(searchQuery.toLowerCase());
+                          const matchesFormat = filterFormat === 'all' || s.format.toLowerCase().includes(filterFormat.toLowerCase());
+                          return matchesQuery && matchesFormat;
+                        })
+                        .map((s) => (
+                          <tr key={s.id}>
+                            <td>
                               <button
-                                className="btn-transport"
-                                style={{ padding: '4px 8px', height: 'auto', fontSize: '0.7rem' }}
-                                onClick={() => setSelectedSessionForMetadata(s)}
-                                title="Inspect Full Technical Audio Metadata"
+                                className={`btn-transport ${previewingSessionId === s.id ? 'btn-cyan' : ''}`}
+                                style={{ padding: '4px 6px', height: '24px', fontSize: '0.65rem' }}
+                                onClick={() => handleTogglePreviewAudio(s)}
+                                title={previewingSessionId === s.id ? 'Pause Audition' : 'Audition / Preview Session Audio'}
                               >
-                                <FileCode size={12} style={{ marginRight: '4px' }} /> Meta
+                                {previewingSessionId === s.id ? <Pause size={12} /> : <Play size={12} />}
                               </button>
-                              <button
-                                className="btn-transport btn-cyan"
-                                style={{ padding: '4px 8px', height: 'auto', fontSize: '0.7rem' }}
-                                onClick={() => handleAdminExportSession(s)}
-                                title="Export Host Session Audio File (Admin Exclusive)"
-                              >
-                                <Download size={12} style={{ marginRight: '4px' }} /> Export WAV
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                            </td>
+                            <td style={{ fontWeight: 600 }}>{s.title}</td>
+                            <td>{s.hostName}</td>
+                            <td style={{ color: 'var(--accent-amber)' }}>{s.guestName}</td>
+                            <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)', fontWeight: 700 }}>
+                              {formatDuration(s.durationSeconds)}
+                            </td>
+                            <td style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                              {new Date(s.createdAt).toLocaleString()}
+                            </td>
+                            <td style={{ fontSize: '0.7rem' }}>
+                              <span className="daw-badge">{s.format}</span>
+                            </td>
+                            <td>
+                              <div style={{ display: 'flex', gap: '6px' }}>
+                                <button
+                                  className="btn-transport"
+                                  style={{ padding: '4px 8px', height: 'auto', fontSize: '0.7rem' }}
+                                  onClick={() => setSelectedSessionForMetadata(s)}
+                                  title="Inspect Full Technical Audio Metadata"
+                                >
+                                  <FileCode size={12} style={{ marginRight: '4px' }} /> Meta
+                                </button>
+                                <button
+                                  className="btn-transport btn-cyan"
+                                  style={{ padding: '4px 8px', height: 'auto', fontSize: '0.7rem' }}
+                                  onClick={() => handleAdminExportSession(s)}
+                                  title="Export Host Session Audio File (Admin Exclusive)"
+                                >
+                                  <Download size={12} style={{ marginRight: '4px' }} /> Export WAV
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
                     </tbody>
                   </table>
                 )}
@@ -607,6 +720,14 @@ export const AdminPanel: React.FC = () => {
           onClose={() => setExportModalSession(null)}
         />
       )}
+
+      {/* Hidden Audio Element for Auditioning Session Audio */}
+      <audio
+        ref={previewAudioRef}
+        src={previewAudioUrl || undefined}
+        onEnded={() => setPreviewingSessionId(null)}
+        style={{ display: 'none' }}
+      />
     </div>
   );
 };

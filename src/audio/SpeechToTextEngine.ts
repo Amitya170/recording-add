@@ -96,8 +96,72 @@ export class SpeechToTextEngine {
     }
   }
 
+  public setLanguage(lang: string) {
+    if (this.recognition) {
+      this.recognition.lang = lang;
+    }
+  }
+
+  public getLanguage(): string {
+    return this.recognition?.lang || 'en-US';
+  }
+
   public setActiveSpeaker(speakerName: string, role: 'host' | 'guest') {
     this.activeSpeaker = speakerName;
     this.activeRole = role;
   }
 }
+
+export function formatAsSRT(items: TranscriptItem[]): string {
+  const formatSrtTime = (sec: number) => {
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')},000`;
+  };
+
+  let srt = '';
+  items.forEach((item, index) => {
+    const startSec = item.seconds;
+    const endSec = startSec + Math.max(3, Math.ceil(item.text.length / 15));
+    srt += `${index + 1}\n`;
+    srt += `${formatSrtTime(startSec)} --> ${formatSrtTime(endSec)}\n`;
+    srt += `${item.speaker}: ${item.text}\n\n`;
+  });
+  return srt;
+}
+
+export function formatAsVTT(items: TranscriptItem[]): string {
+  const formatVttTime = (sec: number) => {
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.000`;
+  };
+
+  let vtt = 'WEBVTT - Podcast Craft Studio Captions\n\n';
+  items.forEach((item, index) => {
+    const startSec = item.seconds;
+    const endSec = startSec + Math.max(3, Math.ceil(item.text.length / 15));
+    vtt += `${index + 1}\n`;
+    vtt += `${formatVttTime(startSec)} --> ${formatVttTime(endSec)}\n`;
+    vtt += `<v ${item.speaker}>${item.text}\n\n`;
+  });
+  return vtt;
+}
+
+export function formatAsTXT(items: TranscriptItem[]): string {
+  let txt = `===========================================================
+PODCAST CRAFT STUDIO — LIVE SPEECH TRANSCRIPT REPORT
+===========================================================
+Generated: ${new Date().toLocaleString()}
+Total Utterances: ${items.length}
+===========================================================\n\n`;
+
+  items.forEach((i) => {
+    txt += `[${i.timestamp}] ${i.speaker.toUpperCase()} (${i.role.toUpperCase()}):\n${i.text}\n\n`;
+  });
+  txt += `===========================================================\nEND OF TRANSCRIPT REPORT\n===========================================================`;
+  return txt;
+}
+

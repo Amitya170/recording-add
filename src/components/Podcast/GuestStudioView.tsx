@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Radio,
   Activity,
@@ -31,6 +31,7 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
   const [isMuted, setIsMuted] = useState(false);
   const [gain, setGain] = useState(1.0);
   const [isSolo, setIsSolo] = useState(false);
+  const [vocalPreset, setVocalPreset] = useState('warm');
 
   const [analysisGuest, setAnalysisGuest] = useState<AnalysisData | null>(null);
   const [showHelp, setShowHelp] = useState(false);
@@ -51,10 +52,35 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
   const [isNoiseSuppressed, setIsNoiseSuppressed] = useState(true);
   const [transcriptItems, setTranscriptItems] = useState<TranscriptItem[]>([]);
   const [showTranscriptModal, setShowTranscriptModal] = useState(false);
+  const [currentLanguage, setCurrentLanguage] = useState('en-US');
 
   const sttEngine = useRef<SpeechToTextEngine | null>(null);
 
   const guestDisplayName = guestNameParam || currentUser?.name || 'Guest Speaker';
+
+  const handleDeviceChange = useCallback(async (id: string) => {
+    setSelectedDevice(id);
+    if (id && engineGuest.current) {
+      try {
+        await engineGuest.current.startInputStream(id);
+        setIsConnected(true);
+
+        // Transmit Guest microphone stream over WebRTC to Host
+        const stream = (engineGuest.current as any).stream as MediaStream | undefined;
+        if (stream && webrtcEngine.current) {
+          const audioTrack = stream.getAudioTracks()[0];
+          if (audioTrack) {
+            await webrtcEngine.current.replaceLocalTrack(audioTrack);
+          } else {
+            webrtcEngine.current.setLocalStream(stream);
+          }
+        }
+      } catch (err) {
+        console.warn('Guest device change failed:', err);
+        setIsConnected(false);
+      }
+    }
+  }, []);
 
   // Initialize Guest Engine & WebRTC
   useEffect(() => {
@@ -65,8 +91,14 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
       try {
         const devs = await getAudioDevices();
         setDevices(devs);
-        if (devs.length > 0 && !selectedDevice) {
-          handleDeviceChange(devs[0].deviceId);
+        if (devs.length > 0) {
+          setSelectedDevice((curr) => {
+            if (!curr) {
+              handleDeviceChange(devs[0].deviceId);
+              return devs[0].deviceId;
+            }
+            return curr;
+          });
         }
       } catch (err) {
         console.warn('Failed getting guest audio devices:', err);
@@ -109,7 +141,7 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
       rEngine.dispose();
       sttEngine.current?.stop();
     };
-  }, []);
+  }, [handleDeviceChange]);
 
   // Visualizer Tick
   useEffect(() => {
@@ -125,24 +157,6 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     return () => cancelAnimationFrame(animId);
   }, []);
 
-  const handleDeviceChange = async (id: string) => {
-    setSelectedDevice(id);
-    if (id && engineGuest.current) {
-      try {
-        await engineGuest.current.startInputStream(id);
-        setIsConnected(true);
-
-        // Transmit Guest microphone stream over WebRTC to Host
-        const stream = (engineGuest.current as any).stream;
-        if (stream && webrtcEngine.current) {
-          webrtcEngine.current.setLocalStream(stream);
-        }
-      } catch (err) {
-        setIsConnected(false);
-      }
-    }
-  };
-
   const handleMute = () => {
     if (engineGuest.current) {
       const muted = engineGuest.current.toggleMute();
@@ -153,6 +167,22 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
   const handleGainChange = (val: number) => {
     setGain(val);
     engineGuest.current?.setGain(val);
+  };
+
+  const handlePresetChange = (preset: string) => {
+    setVocalPreset(preset);
+    engineGuest.current?.applyVocalPreset(preset);
+  };
+
+  const handleToggleNoise = () => {
+    const next = !isNoiseSuppressed;
+    setIsNoiseSuppressed(next);
+    engineGuest.current?.setNoiseSuppression(next);
+  };
+
+  const handleLanguageChange = (lang: string) => {
+    setCurrentLanguage(lang);
+    sttEngine.current?.setLanguage(lang);
   };
 
   return (
@@ -254,7 +284,9 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
             userName={guestDisplayName}
             onOpenFx={() => setShowFxModal(true)}
             isNoiseSuppressed={isNoiseSuppressed}
-            onToggleNoiseSuppression={() => setIsNoiseSuppressed(!isNoiseSuppressed)}
+            onToggleNoiseSuppression={handleToggleNoise}
+            vocalPreset={vocalPreset}
+            onPresetChange={handlePresetChange}
           />
 
           {/* Footer Action Bar */}
@@ -286,8 +318,11 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
           items={transcriptItems}
           onClear={() => setTranscriptItems([])}
           onClose={() => setShowTranscriptModal(false)}
+          currentLanguage={currentLanguage}
+          onLanguageChange={handleLanguageChange}
         />
       )}
     </div>
   );
 };
+

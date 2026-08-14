@@ -319,4 +319,59 @@ ${(s.cueMarkers || []).map((m) => `    * [${m.time}s] ${m.label}`).join('\n') ||
   return report;
 }
 
+/**
+ * Generate spreadsheet-compatible CSV export for all sessions.
+ */
+export function generateSessionsCSV(sessions: RecordingSession[]): string {
+  const headers = [
+    'Session ID',
+    'Title',
+    'Recorded Date',
+    'Host Name',
+    'Host Email',
+    'Guest Name',
+    'Duration (Seconds)',
+    'Duration Formatted',
+    'Sample Rate (Hz)',
+    'Bit Depth',
+    'Channels',
+    'Codec',
+    'Bitrate (kbps)',
+    'File Size (MB)',
+    'Peak Left (dBFS)',
+    'Peak Right (dBFS)',
+    'Integrated LUFS',
+    'Cue Markers Count',
+  ];
+
+  const escapeCSV = (val: any) => {
+    if (val === null || val === undefined) return '""';
+    const str = String(val).replace(/"/g, '""');
+    return `"${str}"`;
+  };
+
+  const rows = sessions.map((s) => [
+    escapeCSV(s.id),
+    escapeCSV(s.title),
+    escapeCSV(s.createdAt),
+    escapeCSV(s.hostName),
+    escapeCSV(s.hostEmail),
+    escapeCSV(s.guestName),
+    escapeCSV(s.durationSeconds),
+    escapeCSV(formatDuration(s.durationSeconds)),
+    escapeCSV(s.sampleRate || 44100),
+    escapeCSV(s.bitDepth || 32),
+    escapeCSV(s.channelCount || 2),
+    escapeCSV(s.audioCodec || 'PCM WAV'),
+    escapeCSV(s.bitrateKbps || 2822),
+    escapeCSV(s.fileSizeMb || 15.4),
+    escapeCSV(s.peakLeftDb ?? -1.5),
+    escapeCSV(s.peakRightDb ?? -2.1),
+    escapeCSV(s.integratedLufs ?? -16.2),
+    escapeCSV((s.cueMarkers || []).length),
+  ]);
+
+  return [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+}
+
 

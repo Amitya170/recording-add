@@ -31,6 +31,61 @@ export const DEFAULT_FX_CONFIG: FxConfig = {
   masterGain: 1.0,
 };
 
+export const VOCAL_PRESETS: Record<string, FxConfig> = {
+  warm: {
+    highPassFreq: 80,
+    eqLowGain: 3.0,
+    eqMidGain: 1.5,
+    eqHighGain: 2.5,
+    compEnabled: true,
+    compThreshold: -16,
+    compRatio: 3.5,
+    compAttack: 0.005,
+    compRelease: 0.1,
+    limiterCeiling: -0.5,
+    masterGain: 1.0,
+  },
+  radio: {
+    highPassFreq: 120,
+    eqLowGain: 4.0,
+    eqMidGain: 3.0,
+    eqHighGain: 4.0,
+    compEnabled: true,
+    compThreshold: -22,
+    compRatio: 6.0,
+    compAttack: 0.003,
+    compRelease: 0.08,
+    limiterCeiling: -0.3,
+    masterGain: 1.0,
+  },
+  gate: {
+    highPassFreq: 100,
+    eqLowGain: -1.0,
+    eqMidGain: 0,
+    eqHighGain: 1.0,
+    compEnabled: true,
+    compThreshold: -26,
+    compRatio: 8.0,
+    compAttack: 0.002,
+    compRelease: 0.05,
+    limiterCeiling: -0.5,
+    masterGain: 1.0,
+  },
+  flat: {
+    highPassFreq: 0,
+    eqLowGain: 0,
+    eqMidGain: 0,
+    eqHighGain: 0,
+    compEnabled: false,
+    compThreshold: 0,
+    compRatio: 1,
+    compAttack: 0.01,
+    compRelease: 0.1,
+    limiterCeiling: -0.5,
+    masterGain: 1.0,
+  },
+};
+
 export class FxRackEngine {
   private ctx: AudioContext;
   public inputNode: GainNode;
@@ -133,4 +188,11 @@ export class FxRackEngine {
     // Master Gain
     this.masterGainNode.gain.setValueAtTime(config.masterGain, now);
   }
+
+  public applyPreset(presetKey: string): FxConfig {
+    const preset = VOCAL_PRESETS[presetKey] || DEFAULT_FX_CONFIG;
+    this.updateConfig(preset);
+    return preset;
+  }
 }
+

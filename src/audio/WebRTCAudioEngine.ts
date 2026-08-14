@@ -122,9 +122,26 @@ export class WebRTCAudioEngine {
     }
 
     if (this.peerConnection && stream) {
+      const senders = this.peerConnection.getSenders();
       stream.getTracks().forEach((track) => {
-        this.peerConnection?.addTrack(track, stream);
+        const existingSender = senders.find((s) => s.track && s.track.kind === track.kind);
+        if (existingSender) {
+          existingSender.replaceTrack(track).catch((e) => console.warn('replaceTrack error:', e));
+        } else {
+          this.peerConnection?.addTrack(track, stream);
+        }
       });
+    }
+  }
+
+  public async replaceLocalTrack(newTrack: MediaStreamTrack): Promise<void> {
+    if (!this.peerConnection) return;
+    const senders = this.peerConnection.getSenders();
+    const sender = senders.find((s) => s.track && s.track.kind === 'audio');
+    if (sender) {
+      await sender.replaceTrack(newTrack);
+    } else {
+      this.peerConnection.addTrack(newTrack);
     }
   }
 

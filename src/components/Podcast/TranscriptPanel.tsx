@@ -1,15 +1,40 @@
 import React, { useState } from 'react';
-import { MessageSquare, X, Download, Copy, CheckCircle, Trash2, FileText } from 'lucide-react';
-import type { TranscriptItem } from '../../audio/SpeechToTextEngine';
+import { MessageSquare, X, Download, Copy, CheckCircle, Trash2, FileText, Globe } from 'lucide-react';
+import { type TranscriptItem, formatAsSRT, formatAsVTT, formatAsTXT } from '../../audio/SpeechToTextEngine';
 
 interface TranscriptPanelProps {
   items: TranscriptItem[];
   onClear: () => void;
   onClose: () => void;
+  currentLanguage?: string;
+  onLanguageChange?: (lang: string) => void;
 }
 
-export const TranscriptPanel: React.FC<TranscriptPanelProps> = ({ items, onClear, onClose }) => {
+const SUPPORTED_LANGUAGES = [
+  { code: 'en-US', label: 'English (US)' },
+  { code: 'en-GB', label: 'English (UK)' },
+  { code: 'es-ES', label: 'Spanish (ES)' },
+  { code: 'fr-FR', label: 'French (FR)' },
+  { code: 'de-DE', label: 'German (DE)' },
+  { code: 'hi-IN', label: 'Hindi (India)' },
+  { code: 'ja-JP', label: 'Japanese (JP)' },
+  { code: 'pt-BR', label: 'Portuguese (BR)' },
+];
+
+export const TranscriptPanel: React.FC<TranscriptPanelProps> = ({
+  items,
+  onClear,
+  onClose,
+  currentLanguage = 'en-US',
+  onLanguageChange,
+}) => {
   const [copied, setCopied] = useState(false);
+  const [selectedLang, setSelectedLang] = useState(currentLanguage);
+
+  const handleLangSelect = (code: string) => {
+    setSelectedLang(code);
+    onLanguageChange?.(code);
+  };
 
   const handleCopy = () => {
     const txt = items.map((i) => `[${i.timestamp}] ${i.speaker}: ${i.text}`).join('\n');
@@ -18,23 +43,12 @@ export const TranscriptPanel: React.FC<TranscriptPanelProps> = ({ items, onClear
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleDownloadTxt = () => {
-    const txt = `===========================================================
-PODCAST CRAFT STUDIO — LIVE TRANSCRIPT LOG
-===========================================================
-Date: ${new Date().toLocaleString()}
-Total Statements: ${items.length}
-===========================================================
-
-${items.map((i) => `[${i.timestamp}] ${i.speaker.toUpperCase()} (${i.role.toUpperCase()}):
-${i.text}\n`).join('\n')}
-===========================================================`;
-
-    const blob = new Blob([txt], { type: 'text/plain' });
+  const downloadBlob = (content: string, filename: string, mime: string) => {
+    const blob = new Blob([content], { type: mime });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Podcast_Transcript_${Date.now()}.txt`;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     setTimeout(() => {
@@ -43,34 +57,19 @@ ${i.text}\n`).join('\n')}
     }, 100);
   };
 
+  const handleDownloadTxt = () => {
+    const txt = formatAsTXT(items);
+    downloadBlob(txt, `Podcast_Transcript_${Date.now()}.txt`, 'text/plain');
+  };
+
   const handleDownloadSrt = () => {
-    let srt = '';
-    items.forEach((item, index) => {
-      const startSec = item.seconds;
-      const endSec = startSec + 4; // Default 4s caption duration
-      const formatSrtTime = (sec: number) => {
-        const h = Math.floor(sec / 3600);
-        const m = Math.floor((sec % 3600) / 60);
-        const s = sec % 60;
-        return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')},000`;
-      };
+    const srt = formatAsSRT(items);
+    downloadBlob(srt, `Podcast_Subtitles_${Date.now()}.srt`, 'text/plain');
+  };
 
-      srt += `${index + 1}\n`;
-      srt += `${formatSrtTime(startSec)} --> ${formatSrtTime(endSec)}\n`;
-      srt += `${item.speaker}: ${item.text}\n\n`;
-    });
-
-    const blob = new Blob([srt], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `Podcast_Subtitles_${Date.now()}.srt`;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => {
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }, 100);
+  const handleDownloadVtt = () => {
+    const vtt = formatAsVTT(items);
+    downloadBlob(vtt, `Podcast_Captions_${Date.now()}.vtt`, 'text/vtt');
   };
 
   return (
@@ -78,7 +77,7 @@ ${i.text}\n`).join('\n')}
       <div
         className="modal-card"
         onClick={(e) => e.stopPropagation()}
-        style={{ width: '640px', maxWidth: '95vw', height: '80vh', display: 'flex', flexDirection: 'column' }}
+        style={{ width: '680px', maxWidth: '95vw', height: '80vh', display: 'flex', flexDirection: 'column' }}
       >
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', borderBottom: '1px solid var(--border-dim)', paddingBottom: '10px' }}>
@@ -91,9 +90,24 @@ ${i.text}\n`).join('\n')}
               </div>
             </div>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-            <X size={18} />
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+              <Globe size={13} color="var(--accent-cyan)" />
+              <select
+                className="daw-select"
+                style={{ padding: '2px 8px', height: '26px', fontSize: '0.72rem' }}
+                value={selectedLang}
+                onChange={(e) => handleLangSelect(e.target.value)}
+              >
+                {SUPPORTED_LANGUAGES.map((l) => (
+                  <option key={l.code} value={l.code}>{l.label}</option>
+                ))}
+              </select>
+            </div>
+            <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         {/* Scrollable Transcript List */}
@@ -126,21 +140,24 @@ ${i.text}\n`).join('\n')}
         </div>
 
         {/* Action Buttons */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '14px', paddingTop: '10px', borderTop: '1px solid var(--border-dim)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '14px', paddingTop: '10px', borderTop: '1px solid var(--border-dim)', flexWrap: 'wrap', gap: '8px' }}>
           <button className="btn-transport" onClick={onClear} disabled={items.length === 0}>
             <Trash2 size={14} /> Clear Log
           </button>
 
-          <div style={{ display: 'flex', gap: '8px' }}>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <button className="btn-transport" onClick={handleCopy} disabled={items.length === 0}>
               {copied ? <CheckCircle size={14} color="#00ff87" /> : <Copy size={14} />}
               {copied ? 'Copied' : 'Copy'}
             </button>
+            <button className="btn-transport" onClick={handleDownloadVtt} disabled={items.length === 0}>
+              <FileText size={14} /> WebVTT (.vtt)
+            </button>
             <button className="btn-transport" onClick={handleDownloadSrt} disabled={items.length === 0}>
-              <FileText size={14} /> Export Subtitle .SRT
+              <FileText size={14} /> Subtitle (.srt)
             </button>
             <button className="btn-transport btn-cyan" onClick={handleDownloadTxt} disabled={items.length === 0}>
-              <Download size={14} /> Export Transcript .TXT
+              <Download size={14} /> Transcript (.txt)
             </button>
           </div>
         </div>
@@ -148,3 +165,4 @@ ${i.text}\n`).join('\n')}
     </div>
   );
 };
+

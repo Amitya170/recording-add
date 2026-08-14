@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Radio,
   Mic,
@@ -62,6 +62,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
   const [_gainB, _setGainB] = useState(1.0);
   const [soloA, setSoloA] = useState(false);
   const [_soloB, setSoloB] = useState(false);
+  const [vocalPresetA, setVocalPresetA] = useState('warm');
 
   const [analysisA, setAnalysisA] = useState<AnalysisData | null>(null);
   const [_analysisB, setAnalysisB] = useState<AnalysisData | null>(null);
@@ -98,6 +99,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
   const [_isNoiseB, _setIsNoiseB] = useState(true);
   const [transcriptItems, setTranscriptItems] = useState<TranscriptItem[]>([]);
   const [showTranscriptModal, setShowTranscriptModal] = useState(false);
+  const [currentLanguage, setCurrentLanguage] = useState('en-US');
   const [recoveryData, setRecoveryData] = useState<BackupSessionData | null>(null);
 
   const sttEngine = useRef<SpeechToTextEngine | null>(null);
@@ -105,7 +107,46 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
   const hostDisplayName = currentUser?.name || hostNameParam || 'Host Speaker';
   const guestDisplayName = guestNameParam || 'Guest Speaker';
+  const hostDisplayNameRef = useRef(hostDisplayName);
+  const guestDisplayNameRef = useRef(guestDisplayName);
+  useEffect(() => {
+    hostDisplayNameRef.current = hostDisplayName;
+    guestDisplayNameRef.current = guestDisplayName;
+  }, [hostDisplayName, guestDisplayName]);
+
   const isAdmin = currentUser?.role === 'admin';
+
+  // Device Handlers
+  const handleDeviceChangeA = useCallback(async (id: string) => {
+    setDeviceA(id);
+    if (id && engineA.current) {
+      try {
+        await engineA.current.startInputStream(id);
+        setIsConnectedA(true);
+        setMicPermissionError(null);
+        const devs = await getAudioDevices();
+        setDevices(devs);
+
+        // Transmit host mic stream over WebRTC to guest speaker
+        const hostStream = (engineA.current as any).stream as MediaStream | undefined;
+        if (hostStream && webrtcEngine.current) {
+          const audioTrack = hostStream.getAudioTracks()[0];
+          if (audioTrack) {
+            await webrtcEngine.current.replaceLocalTrack(audioTrack);
+          } else {
+            webrtcEngine.current.setLocalStream(hostStream);
+          }
+        }
+      } catch (err: any) {
+        setIsConnectedA(false);
+        if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
+          setMicPermissionError('Microphone access denied. Please allow microphone permissions in your browser settings and try again.');
+        } else {
+          setMicPermissionError(`Failed to connect microphone: ${err?.message || 'Unknown error'}`);
+        }
+      }
+    }
+  }, []);
 
   // Initialize Engines
   useEffect(() => {
@@ -118,8 +159,14 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       try {
         const devs = await getAudioDevices();
         setDevices(devs);
-        if (devs.length > 0 && !deviceA) {
-          handleDeviceChangeA(devs[0].deviceId);
+        if (devs.length > 0) {
+          setDeviceA((curr) => {
+            if (!curr) {
+              handleDeviceChangeA(devs[0].deviceId);
+              return devs[0].deviceId;
+            }
+            return curr;
+          });
         }
       } catch (err) {
         console.warn('Failed getting audio devices:', err);
@@ -176,7 +223,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       rEngine.dispose();
       sttEngine.current?.stop();
     };
-  }, []);
+  }, [currentUser?.role, handleDeviceChangeA]);
 
   // Visualizer Loop
   useEffect(() => {
@@ -212,8 +259,8 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       autoSaveInterval = setInterval(() => {
         saveAutoSaveBackup({
           id: 'active_session_backup',
-          hostName: hostDisplayName,
-          guestName: guestDisplayName,
+          hostName: hostDisplayNameRef.current,
+          guestName: guestDisplayNameRef.current,
           elapsedMs: elapsedRef.current,
           updatedAt: new Date().toISOString(),
           sampleRate: 44100,
@@ -226,6 +273,94 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       clearInterval(autoSaveInterval);
     };
   }, [isRecording, isPaused]);
+
+  // Recording Actions
+  const handleStartRecord = useCallback(() => {
+    if (!isConnectedA && !isConnectedB) {
+      alert('Please select at least one microphone input device before starting the recording.');
+      return;
+    }
+    engineA.current?.startRecording();
+    engineB.current?.startRecording();
+    elapsedRef.current = 0;
+    setIsRecording(true);
+    setIsPaused(false);
+
+    // Start Live Speech-to-Text Engine
+    sttEngine.current?.start(hostDisplayNameRef.current, 'host');
+  }, [isConnectedA, isConnectedB]);
+
+  const handlePause = useCallback(() => {
+    if (isPaused) {
+      engineA.current?.resumeRecording();
+      engineB.current?.resumeRecording();
+      setIsPaused(false);
+    } else {
+      engineA.current?.pauseRecording();
+      engineB.current?.pauseRecording();
+      setIsPaused(true);
+    }
+  }, [isPaused]);
+
+  const handleStop = useCallback(() => {
+    const bA = engineA.current?.stopRecording() || null;
+    const bB = engineB.current?.stopRecording() || null;
+    const finalDurationSeconds = Math.round(elapsedRef.current / 1000);
+
+    setIsRecording(false);
+    setIsPaused(false);
+    setBufferA(bA);
+    setBufferB(bB);
+
+    let compiled: AudioBuffer | null = null;
+    if (bA && bB && engineA.current?.audioContext) {
+      compiled = mergeToStereo(engineA.current.audioContext, bA, bB);
+    } else if (bA) {
+      compiled = bA;
+    } else if (bB) {
+      compiled = bB;
+    }
+
+    sttEngine.current?.stop();
+    clearRecoverySession();
+
+    if (compiled) {
+      setAudioBuffer(compiled);
+
+      // Automatically log recording session to SessionStore for Admin Reports
+      const savedSession = saveRecordingSession({
+        hostId: currentUser?.id || 'usr_host',
+        hostName: hostDisplayNameRef.current,
+        hostEmail: currentUser?.email || 'host@studio.local',
+        guestName: guestDisplayNameRef.current,
+        title: `Podcast Session ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+        durationSeconds: finalDurationSeconds || Math.round(compiled.duration),
+        channelCount: compiled.numberOfChannels,
+        format: 'WAV 32-bit Float',
+      });
+
+      // Save raw binary WAV blobs to CloudAudioStore (IndexedDB) for Admin Audio Stem Export
+      try {
+        const stereoBlob = encodeWav(compiled, 32);
+        const blobA = bA ? encodeWav(bA, 32) : undefined;
+        const blobB = bB ? encodeWav(bB, 32) : undefined;
+        saveSessionAudioBlobs(savedSession.id, stereoBlob, blobA, blobB);
+      } catch (err) {
+        console.error('Failed saving session audio blob:', err);
+      }
+    }
+  }, [currentUser?.id, currentUser?.email]);
+
+  const handleAddMarker = useCallback((time: number) => {
+    setMarkers((prev) => [
+      ...prev,
+      {
+        id: Date.now().toString(),
+        time,
+        label: `Cue ${prev.length + 1}`,
+      },
+    ]);
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -273,7 +408,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isRecording, isPaused, isConnectedA, isConnectedB]);
+  }, [isRecording, isPaused, isConnectedA, isConnectedB, handlePause, handleStartRecord, handleStop, handleAddMarker]);
 
   const formatTime = (ms: number) => {
     const totalSec = Math.floor(ms / 1000);
@@ -281,33 +416,6 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     const s = totalSec % 60;
     const cs = Math.floor((ms % 1000) / 10);
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${cs.toString().padStart(2, '0')}`;
-  };
-
-  // Device Handlers
-  const handleDeviceChangeA = async (id: string) => {
-    setDeviceA(id);
-    if (id && engineA.current) {
-      try {
-        await engineA.current.startInputStream(id);
-        setIsConnectedA(true);
-        setMicPermissionError(null);
-        const devs = await getAudioDevices();
-        setDevices(devs);
-
-        // Transmit host mic stream over WebRTC to guest speaker
-        const hostStream = (engineA.current as any).stream;
-        if (hostStream && webrtcEngine.current) {
-          webrtcEngine.current.setLocalStream(hostStream);
-        }
-      } catch (err: any) {
-        setIsConnectedA(false);
-        if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
-          setMicPermissionError('Microphone access denied. Please allow microphone permissions in your browser settings and try again.');
-        } else {
-          setMicPermissionError(`Failed to connect microphone: ${err?.message || 'Unknown error'}`);
-        }
-      }
-    }
   };
 
   const handleMuteA = () => {
@@ -329,6 +437,17 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     engineA.current?.setGain(val);
   };
 
+  const handlePresetChangeA = (preset: string) => {
+    setVocalPresetA(preset);
+    engineA.current?.applyVocalPreset(preset);
+  };
+
+  const handleToggleNoiseA = () => {
+    const next = !isNoiseA;
+    setIsNoiseA(next);
+    engineA.current?.setNoiseSuppression(next);
+  };
+
   const handleSoloA = () => {
     const next = !soloA;
     setSoloA(next);
@@ -338,81 +457,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     }
   };
 
-  // Recording Actions
-  const handleStartRecord = async () => {
-    if (!isConnectedA && !isConnectedB) {
-      alert('Please select at least one microphone input device before starting the recording.');
-      return;
-    }
-    engineA.current?.startRecording();
-    engineB.current?.startRecording();
-    elapsedRef.current = 0;
-    setIsRecording(true);
-    setIsPaused(false);
-
-    // Start Live Speech-to-Text Engine
-    sttEngine.current?.start(hostDisplayName, 'host');
-  };
-
-  const handlePause = () => {
-    if (isPaused) {
-      engineA.current?.resumeRecording();
-      engineB.current?.resumeRecording();
-      setIsPaused(false);
-    } else {
-      engineA.current?.pauseRecording();
-      engineB.current?.pauseRecording();
-      setIsPaused(true);
-    }
-  };
-
-  const handleStop = () => {
-    const bA = engineA.current?.stopRecording() || null;
-    const bB = engineB.current?.stopRecording() || null;
-    const finalDurationSeconds = Math.round(elapsedRef.current / 1000);
-
-    setIsRecording(false);
-    setIsPaused(false);
-    setBufferA(bA);
-    setBufferB(bB);
-
-    let compiled: AudioBuffer | null = null;
-    if (bA && bB && engineA.current?.audioContext) {
-      compiled = mergeToStereo(engineA.current.audioContext, bA, bB);
-    } else if (bA) {
-      compiled = bA;
-    } else if (bB) {
-      compiled = bB;
-    }
-
-    sttEngine.current?.stop();
-    clearRecoverySession();
-
-    if (compiled) {
-      setAudioBuffer(compiled);
-
-      // Automatically log recording session to SessionStore for Admin Reports
-      const savedSession = saveRecordingSession({
-        hostId: currentUser?.id || 'usr_host',
-        hostName: hostDisplayName,
-        hostEmail: currentUser?.email || 'host@studio.local',
-        guestName: guestDisplayName,
-        title: `Podcast Session ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
-        durationSeconds: finalDurationSeconds || Math.round(compiled.duration),
-        channelCount: compiled.numberOfChannels,
-        format: 'WAV 32-bit Float',
-      });
-
-      // Save raw binary WAV blobs to CloudAudioStore (IndexedDB) for Admin Audio Stem Export
-      try {
-        const stereoBlob = encodeWav(compiled, 32);
-        const blobA = bA ? encodeWav(bA, 32) : undefined;
-        const blobB = bB ? encodeWav(bB, 32) : undefined;
-        saveSessionAudioBlobs(savedSession.id, stereoBlob, blobA, blobB);
-      } catch (err) {
-        console.error('Failed saving session audio blob:', err);
-      }
-    }
+  const handleLanguageChange = (lang: string) => {
+    setCurrentLanguage(lang);
+    sttEngine.current?.setLanguage(lang);
   };
 
   const handleClear = () => {
@@ -425,14 +472,6 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     setMarkers([]);
     elapsedRef.current = 0;
     setElapsedMs(0);
-  };
-
-  const handleAddMarker = (time: number) => {
-    setMarkers([...markers, {
-      id: Date.now().toString(),
-      time,
-      label: `Cue ${markers.length + 1}`,
-    }]);
   };
 
   const hasAudio = audioBuffer !== null;
@@ -607,7 +646,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
               setActiveFxLabel('Speaker A (Host)');
             }}
             isNoiseSuppressed={isNoiseA}
-            onToggleNoiseSuppression={() => setIsNoiseA(!isNoiseA)}
+            onToggleNoiseSuppression={handleToggleNoiseA}
+            vocalPreset={vocalPresetA}
+            onPresetChange={handlePresetChangeA}
           />
         </section>
 
@@ -726,6 +767,8 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
           items={transcriptItems}
           onClear={() => setTranscriptItems([])}
           onClose={() => setShowTranscriptModal(false)}
+          currentLanguage={currentLanguage}
+          onLanguageChange={handleLanguageChange}
         />
       )}
 

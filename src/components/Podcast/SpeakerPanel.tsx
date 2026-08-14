@@ -23,6 +23,8 @@ interface SpeakerPanelProps {
   onOpenFx?: () => void;
   isNoiseSuppressed?: boolean;
   onToggleNoiseSuppression?: () => void;
+  vocalPreset?: string;
+  onPresetChange?: (preset: string) => void;
 }
 
 export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
@@ -45,6 +47,8 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
   onOpenFx,
   isNoiseSuppressed = true,
   onToggleNoiseSuppression,
+  vocalPreset = 'warm',
+  onPresetChange,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const colorHex = color === 'cyan' ? '#00f0ff' : '#ffb700';
@@ -194,7 +198,11 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
 
         <div className="speaker-device-row">
           <label className="speaker-device-label">VOCAL CHAIN DSP PRESET</label>
-          <select className="daw-select" defaultValue="warm">
+          <select
+            className="daw-select"
+            value={vocalPreset}
+            onChange={(e) => onPresetChange?.(e.target.value)}
+          >
             <option value="warm">🎙️ Broadcaster Warm Vocal</option>
             <option value="radio">📻 Radio Punch EQ</option>
             <option value="gate">🔇 Aggressive Noise Gate</option>
