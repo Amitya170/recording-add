@@ -39,6 +39,7 @@ import { TranscriptPanel } from './TranscriptPanel';
 import type { Marker } from '../Markers/MarkerList';
 import { MarkerList } from '../Markers/MarkerList';
 import { SoundboardPanel } from './SoundboardPanel';
+import { getAutoUploadToDrive, uploadAudioBlobToDrive } from '../../auth/GoogleDriveUploader';
 
 interface PodcastStudioProps {
   guestNameParam?: string;
@@ -345,6 +346,23 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         const blobA = bA ? encodeWav(bA, 32) : undefined;
         const blobB = bB ? encodeWav(bB, 32) : undefined;
         saveSessionAudioBlobs(savedSession.id, stereoBlob, blobA, blobB);
+
+        // Auto-upload recorded audio directly to Google Drive folder if enabled
+        if (getAutoUploadToDrive()) {
+          const sanitized = savedSession.title.replace(/\s+/g, '_');
+          uploadAudioBlobToDrive({
+            blob: stereoBlob,
+            fileName: `${sanitized}_${savedSession.id.slice(0, 8)}.wav`,
+            sessionTitle: savedSession.title,
+            hostName: savedSession.hostName,
+            guestName: savedSession.guestName,
+            durationSeconds: savedSession.durationSeconds,
+          }).then((res) => {
+            if (res.success && res.fileUrl) {
+              console.log('✅ Session audio auto-uploaded to Google Drive:', res.fileUrl);
+            }
+          }).catch((e) => console.warn('Google Drive auto-upload failed:', e));
+        }
       } catch (err) {
         console.error('Failed saving session audio blob:', err);
       }

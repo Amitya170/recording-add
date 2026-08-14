@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Download, X, FileAudio, Users } from 'lucide-react';
+import { Download, X, FileAudio, Users, CloudUpload, CheckCircle, AlertCircle, ExternalLink, Loader2 } from 'lucide-react';
 import { encodeWav, type BitDepth } from '../../audio/encoders/WavEncoder';
+import { uploadAudioBlobToDrive, getGoogleDriveWebhookUrl } from '../../auth/GoogleDriveUploader';
 
 interface ExportModalProps {
   audioBuffer: AudioBuffer | null;
@@ -19,6 +20,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [exportMode, setExportMode] = useState<'stereo' | 'separate'>('stereo');
   const [title, setTitle] = useState<string>('Podcast Recording');
   const [artist, setArtist] = useState<string>('Podcast Craft Studio');
+
+  // Google Drive Upload State
+  const [isUploadingDrive, setIsUploadingDrive] = useState(false);
+  const [driveUploadSuccess, setDriveUploadSuccess] = useState<{ url: string; fileName: string } | null>(null);
+  const [driveUploadError, setDriveUploadError] = useState<string | null>(null);
 
   if (!audioBuffer) return null;
 
@@ -66,11 +72,47 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     onClose();
   };
 
+  const handleUploadToDrive = async () => {
+    const webhookUrl = getGoogleDriveWebhookUrl();
+    if (!webhookUrl) {
+      setDriveUploadError('Google Drive Webhook URL is not configured. Please open Admin Panel -> Google Drive Storage Settings to configure your Webhook URL.');
+      return;
+    }
+
+    setIsUploadingDrive(true);
+    setDriveUploadError(null);
+    setDriveUploadSuccess(null);
+
+    const sanitized = title.replace(/\s+/g, '_');
+    const fileName = `${sanitized}_stereo_${format}.wav`;
+    const blob = encodeWav(audioBuffer, depth);
+
+    try {
+      const res = await uploadAudioBlobToDrive({
+        blob,
+        fileName,
+        sessionTitle: title,
+        hostName: artist,
+        durationSeconds: Math.round(duration),
+      });
+
+      if (res.success && res.fileUrl) {
+        setDriveUploadSuccess({ url: res.fileUrl, fileName });
+      } else {
+        setDriveUploadError(res.error || 'Failed uploading audio file to Google Drive.');
+      }
+    } catch (err: any) {
+      setDriveUploadError(err?.message || 'Error uploading to Google Drive.');
+    } finally {
+      setIsUploadingDrive(false);
+    }
+  };
+
   const hasBothSpeakers = !!speakerABuffer && !!speakerBBuffer;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '520px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', borderBottom: '1px solid var(--border-dim)', paddingBottom: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <FileAudio className="daw-logo-icon" size={20} />
@@ -80,6 +122,30 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             <X size={18} />
           </button>
         </div>
+
+        {/* Google Drive Upload Feedback Alerts */}
+        {driveUploadSuccess && (
+          <div className="login-success" style={{ marginBottom: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <CheckCircle size={14} />
+              <span>Audio uploaded to Google Drive!</span>
+            </div>
+            <a
+              href={driveUploadSuccess.url}
+              target="_blank"
+              rel="noreferrer"
+              style={{ color: 'var(--accent-green)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px', textDecoration: 'underline' }}
+            >
+              Open in Drive <ExternalLink size={12} />
+            </a>
+          </div>
+        )}
+
+        {driveUploadError && (
+          <div className="login-error" style={{ marginBottom: '12px' }}>
+            <AlertCircle size={14} /> <span>{driveUploadError}</span>
+          </div>
+        )}
 
         {/* Export Mode — Stereo vs Separate */}
         {hasBothSpeakers && (
@@ -140,14 +206,35 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         </div>
 
         {/* Actions */}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-          <button className="btn-transport" onClick={onClose}>Cancel</button>
-          <button className="btn-transport btn-cyan" onClick={handleDownload}>
-            <Download size={14} />
-            {exportMode === 'stereo' ? 'Download Stereo WAV' : 'Download Separate WAVs'}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          <button
+            className="btn-transport"
+            style={{ background: 'rgba(0, 255, 135, 0.1)', color: 'var(--accent-green)', borderColor: 'rgba(0, 255, 135, 0.3)' }}
+            onClick={handleUploadToDrive}
+            disabled={isUploadingDrive}
+            title="Upload recorded audio directly to your Google Drive folder"
+          >
+            {isUploadingDrive ? (
+              <>
+                <Loader2 size={14} className="animate-spin" /> Uploading to Drive...
+              </>
+            ) : (
+              <>
+                <CloudUpload size={14} /> Upload to Google Drive
+              </>
+            )}
           </button>
+
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button className="btn-transport" onClick={onClose}>Close</button>
+            <button className="btn-transport btn-cyan" onClick={handleDownload}>
+              <Download size={14} />
+              {exportMode === 'stereo' ? 'Download Stereo WAV' : 'Download Separate WAVs'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
 };
+

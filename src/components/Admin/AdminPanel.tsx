@@ -30,12 +30,29 @@ import {
   Search,
   Play,
   Pause,
+  CloudUpload,
+  ExternalLink,
+  Copy,
+  Check,
+  HelpCircle,
+  Loader2,
+  FolderSync,
 } from 'lucide-react';
 import { AudioMetadataModal } from './AudioMetadataModal';
 import { ExportModal } from '../Export/ExportModal';
 import { encodeWav } from '../../audio/encoders/WavEncoder';
 
 import { getSessionAudioBlobs } from '../../auth/CloudAudioStore';
+import {
+  getGoogleDriveWebhookUrl,
+  setGoogleDriveWebhookUrl,
+  getGoogleDriveFolderUrl,
+  setGoogleDriveFolderUrl,
+  getAutoUploadToDrive,
+  setAutoUploadToDrive,
+  uploadAudioBlobToDrive,
+  APPS_SCRIPT_TEMPLATE,
+} from '../../auth/GoogleDriveUploader';
 
 export const AdminPanel: React.FC = () => {
   const { getAllUsers, createHostAccount, deleteUser, currentUser, logout } = useAuth();
@@ -55,6 +72,16 @@ export const AdminPanel: React.FC = () => {
   const [previewingSessionId, setPreviewingSessionId] = useState<string | null>(null);
   const [previewAudioUrl, setPreviewAudioUrl] = useState<string | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Google Drive Cloud Storage Settings State
+  const [driveWebhookUrl, setDriveWebhookUrl] = useState(getGoogleDriveWebhookUrl());
+  const [driveFolderUrl, setDriveFolderUrl] = useState(getGoogleDriveFolderUrl());
+  const [autoUploadDrive, setAutoUploadDriveState] = useState(getAutoUploadToDrive());
+  const [driveSaveSuccess, setDriveSaveSuccess] = useState(false);
+  const [showScriptGuideModal, setShowScriptGuideModal] = useState(false);
+  const [copiedScript, setCopiedScript] = useState(false);
+  const [uploadingSessionId, setUploadingSessionId] = useState<string | null>(null);
+  const [driveUploadMessage, setDriveUploadMessage] = useState<{ id: string; success: boolean; text: string; url?: string } | null>(null);
 
   useEffect(() => {
     // Estimate storage from session data
@@ -196,6 +223,78 @@ export const AdminPanel: React.FC = () => {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     }, 100);
+  };
+
+  const handleSaveDriveSettings = (e: React.FormEvent) => {
+    e.preventDefault();
+    setGoogleDriveWebhookUrl(driveWebhookUrl);
+    setGoogleDriveFolderUrl(driveFolderUrl);
+    setAutoUploadToDrive(autoUploadDrive);
+    setDriveSaveSuccess(true);
+    setTimeout(() => setDriveSaveSuccess(false), 3000);
+  };
+
+  const handleCopyAppsScript = () => {
+    navigator.clipboard.writeText(APPS_SCRIPT_TEMPLATE);
+    setCopiedScript(true);
+    setTimeout(() => setCopiedScript(false), 2500);
+  };
+
+  const handleUploadSessionToDrive = async (session: RecordingSession) => {
+    const webhook = getGoogleDriveWebhookUrl();
+    if (!webhook) {
+      alert('Please configure and save your Google Drive Webhook URL first in the Google Drive Cloud Storage panel.');
+      return;
+    }
+
+    setUploadingSessionId(session.id);
+    setDriveUploadMessage(null);
+
+    let blobToUpload: Blob;
+    const stored = await getSessionAudioBlobs(session.id);
+    if (stored && stored.stereoBlob) {
+      blobToUpload = stored.stereoBlob;
+    } else {
+      const bufs = createAudioBuffersForSession(session);
+      blobToUpload = encodeWav(bufs.audioBuffer, 16);
+    }
+
+    const sanitized = session.title.replace(/\s+/g, '_');
+    const fileName = `${sanitized}_${session.id.slice(0, 8)}.wav`;
+
+    try {
+      const res = await uploadAudioBlobToDrive({
+        blob: blobToUpload,
+        fileName,
+        sessionTitle: session.title,
+        hostName: session.hostName,
+        guestName: session.guestName,
+        durationSeconds: session.durationSeconds,
+      });
+
+      if (res.success && res.fileUrl) {
+        setDriveUploadMessage({
+          id: session.id,
+          success: true,
+          text: 'Uploaded to Drive!',
+          url: res.fileUrl,
+        });
+      } else {
+        setDriveUploadMessage({
+          id: session.id,
+          success: false,
+          text: res.error || 'Failed uploading to Google Drive',
+        });
+      }
+    } catch (err: any) {
+      setDriveUploadMessage({
+        id: session.id,
+        success: false,
+        text: err?.message || 'Upload error',
+      });
+    } finally {
+      setUploadingSessionId(null);
+    }
   };
 
   const refreshData = useCallback(() => {
@@ -594,7 +693,19 @@ export const AdminPanel: React.FC = () => {
                                 {previewingSessionId === s.id ? <Pause size={12} /> : <Play size={12} />}
                               </button>
                             </td>
-                            <td style={{ fontWeight: 600 }}>{s.title}</td>
+                            <td style={{ fontWeight: 600 }}>
+                              <div>{s.title}</div>
+                              {driveUploadMessage?.id === s.id && (
+                                <div style={{ fontSize: '0.68rem', marginTop: '2px', color: driveUploadMessage.success ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                                  {driveUploadMessage.text}{' '}
+                                  {driveUploadMessage.url && (
+                                    <a href={driveUploadMessage.url} target="_blank" rel="noreferrer" style={{ textDecoration: 'underline', color: 'var(--accent-green)' }}>
+                                      Open Drive File ↗
+                                    </a>
+                                  )}
+                                </div>
+                              )}
+                            </td>
                             <td>{s.hostName}</td>
                             <td style={{ color: 'var(--accent-amber)' }}>{s.guestName}</td>
                             <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)', fontWeight: 700 }}>
@@ -607,7 +718,7 @@ export const AdminPanel: React.FC = () => {
                               <span className="daw-badge">{s.format}</span>
                             </td>
                             <td>
-                              <div style={{ display: 'flex', gap: '6px' }}>
+                              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                                 <button
                                   className="btn-transport"
                                   style={{ padding: '4px 8px', height: 'auto', fontSize: '0.7rem' }}
@@ -615,6 +726,23 @@ export const AdminPanel: React.FC = () => {
                                   title="Inspect Full Technical Audio Metadata"
                                 >
                                   <FileCode size={12} style={{ marginRight: '4px' }} /> Meta
+                                </button>
+                                <button
+                                  className="btn-transport"
+                                  style={{ padding: '4px 8px', height: 'auto', fontSize: '0.7rem', background: 'rgba(0, 255, 135, 0.1)', color: 'var(--accent-green)', borderColor: 'rgba(0, 255, 135, 0.3)' }}
+                                  onClick={() => handleUploadSessionToDrive(s)}
+                                  disabled={uploadingSessionId === s.id}
+                                  title="Upload this recorded audio directly to your Google Drive folder"
+                                >
+                                  {uploadingSessionId === s.id ? (
+                                    <>
+                                      <Loader2 size={12} className="animate-spin" style={{ marginRight: '4px' }} /> Uploading...
+                                    </>
+                                  ) : (
+                                    <>
+                                      <CloudUpload size={12} style={{ marginRight: '4px' }} /> Drive
+                                    </>
+                                  )}
                                 </button>
                                 <button
                                   className="btn-transport btn-cyan"
@@ -635,8 +763,102 @@ export const AdminPanel: React.FC = () => {
             </div>
           </div>
 
-          {/* Right Column: Create Host Account Form */}
+          {/* Right Column: Google Drive Cloud Sync & Create Host Account */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {/* Google Drive Cloud Storage Settings */}
+            <div className="card-panel" style={{ border: '1px solid rgba(0, 255, 135, 0.25)' }}>
+              <div className="card-header" style={{ justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <FolderSync size={16} color="var(--accent-green)" />
+                  <span style={{ color: 'var(--accent-green)' }}>GOOGLE DRIVE STORAGE SYNC</span>
+                </div>
+                <button
+                  className="btn-transport"
+                  style={{ padding: '2px 6px', height: '22px', fontSize: '0.68rem' }}
+                  onClick={() => setShowScriptGuideModal(true)}
+                  title="How to connect Google Drive without API keys in 1 minute"
+                >
+                  <HelpCircle size={11} style={{ marginRight: '3px' }} /> Setup Guide
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveDriveSettings} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <p style={{ fontSize: '0.73rem', color: 'var(--text-secondary)', marginBottom: '2px' }}>
+                  Automatically save all recorded audio WAV files directly to your Google Drive folder via free Google Apps Script.
+                </p>
+
+                {driveSaveSuccess && (
+                  <div className="login-success" style={{ margin: '2px 0', padding: '6px 8px' }}>
+                    <CheckCircle size={13} /> <span>Google Drive settings saved!</span>
+                  </div>
+                )}
+
+                <div className="login-field">
+                  <label style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>APPS SCRIPT WEBHOOK URL</span>
+                    {driveWebhookUrl && <span style={{ color: 'var(--accent-green)', fontSize: '0.65rem' }}>● CONFIGURED</span>}
+                  </label>
+                  <input
+                    className="daw-input"
+                    value={driveWebhookUrl}
+                    onChange={(e) => setDriveWebhookUrl(e.target.value)}
+                    placeholder="https://script.google.com/macros/s/.../exec"
+                    style={{ fontSize: '0.72rem' }}
+                  />
+                </div>
+
+                <div className="login-field">
+                  <label>GOOGLE DRIVE FOLDER LINK (OPTIONAL)</label>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <input
+                      className="daw-input"
+                      value={driveFolderUrl}
+                      onChange={(e) => setDriveFolderUrl(e.target.value)}
+                      placeholder="https://drive.google.com/drive/folders/..."
+                      style={{ fontSize: '0.72rem', flex: 1 }}
+                    />
+                    {driveFolderUrl && (
+                      <a
+                        href={driveFolderUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="btn-transport"
+                        style={{ padding: '4px 8px', height: 'auto', display: 'flex', alignItems: 'center' }}
+                        title="Open Google Drive Folder in new tab"
+                      >
+                        <ExternalLink size={13} />
+                      </a>
+                    )}
+                  </div>
+                </div>
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.74rem', color: 'var(--text-primary)', cursor: 'pointer', margin: '4px 0' }}>
+                  <input
+                    type="checkbox"
+                    checked={autoUploadDrive}
+                    onChange={(e) => setAutoUploadDriveState(e.target.checked)}
+                    style={{ accentColor: 'var(--accent-green)' }}
+                  />
+                  <span>Auto-upload audio to Google Drive when session stops</span>
+                </label>
+
+                <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
+                  <button type="submit" className="btn-transport btn-cyan" style={{ flex: 1 }}>
+                    <CloudUpload size={13} /> Save Drive Settings
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-transport"
+                    onClick={() => setShowScriptGuideModal(true)}
+                    title="Get Google Apps Script Code"
+                  >
+                    <FileCode size={13} /> Code
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {/* Create Host Account Card */}
             <div className="card-panel">
               <div className="card-header">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -701,6 +923,61 @@ export const AdminPanel: React.FC = () => {
           </div>
         </section>
       </main>
+
+      {/* Google Apps Script 1-Minute Setup Guide Modal */}
+      {showScriptGuideModal && (
+        <div className="modal-overlay" onClick={() => setShowScriptGuideModal(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '680px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px', borderBottom: '1px solid var(--border-dim)', paddingBottom: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <FolderSync color="var(--accent-green)" size={20} />
+                <h3 style={{ fontSize: '1.05rem', fontWeight: 700 }}>GOOGLE DRIVE AUDIO UPLOAD SETUP (NO API KEY NEEDED)</h3>
+              </div>
+              <button onClick={() => setShowScriptGuideModal(false)} className="btn-icon" style={{ background: 'none', border: 'none', color: 'var(--text-secondary)' }}>
+                ✕
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+              <div>
+                <strong style={{ color: '#fff' }}>Step 1:</strong> Open your Google Drive folder and copy the <code style={{ color: 'var(--accent-cyan)' }}>FOLDER_ID</code> from the browser URL (the characters after <code style={{ color: 'var(--accent-cyan)' }}>/folders/</code>).
+              </div>
+              <div>
+                <strong style={{ color: '#fff' }}>Step 2:</strong> Go to <a href="https://script.google.com/" target="_blank" rel="noreferrer" style={{ color: 'var(--accent-green)', textDecoration: 'underline' }}>script.google.com</a> and click <strong>New project</strong>.
+              </div>
+              <div>
+                <strong style={{ color: '#fff' }}>Step 3:</strong> Replace all code in the editor with the script below and replace <code style={{ color: 'var(--accent-cyan)' }}>YOUR_GOOGLE_DRIVE_FOLDER_ID_HERE</code> with your Folder ID.
+              </div>
+
+              <div style={{ position: 'relative', background: 'var(--bg-darker)', border: '1px solid var(--border-dim)', borderRadius: '6px', padding: '12px' }}>
+                <button
+                  className="btn-transport btn-cyan"
+                  onClick={handleCopyAppsScript}
+                  style={{ position: 'absolute', top: '8px', right: '8px', padding: '4px 10px', height: '26px', fontSize: '0.72rem' }}
+                >
+                  {copiedScript ? <><Check size={12} /> Copied!</> : <><Copy size={12} /> Copy Script Code</>}
+                </button>
+                <pre style={{ margin: 0, maxHeight: '200px', overflowY: 'auto', fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--accent-green)', lineHeight: 1.4 }}>
+                  {APPS_SCRIPT_TEMPLATE}
+                </pre>
+              </div>
+
+              <div>
+                <strong style={{ color: '#fff' }}>Step 4:</strong> Click <strong>Deploy</strong> → <strong>New deployment</strong> → Type: <strong>Web app</strong> → Execute as: <strong>Me</strong> → Who has access: <strong>Anyone</strong> → Click <strong>Deploy</strong>.
+              </div>
+              <div>
+                <strong style={{ color: '#fff' }}>Step 5:</strong> Copy the generated <strong>Web app URL</strong> and paste it into the <strong>APPS SCRIPT WEBHOOK URL</strong> input field!
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px' }}>
+              <button className="btn-transport btn-cyan" onClick={() => setShowScriptGuideModal(false)}>
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Audio Metadata Modal */}
       {selectedSessionForMetadata && (
