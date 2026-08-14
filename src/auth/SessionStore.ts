@@ -132,9 +132,22 @@ export function getUserDurationReports(allUsers: any[]): UserDurationReport[] {
   const sessions = getStoredSessions();
 
   return allUsers.map((user) => {
-    const userSessions = sessions.filter(
-      (s) => s.hostId === user.id || s.hostEmail?.toLowerCase() === user.email?.toLowerCase()
-    );
+    const userEmail = (user.email || '').toLowerCase().trim();
+    const userName = (user.name || '').toLowerCase().trim();
+    const userId = user.id;
+
+    const userSessions = sessions.filter((s) => {
+      const sEmail = (s.hostEmail || '').toLowerCase().trim();
+      const sName = (s.hostName || '').toLowerCase().trim();
+      const sId = s.hostId;
+
+      return (
+        (userId && sId === userId) ||
+        (userEmail && sEmail && sEmail === userEmail) ||
+        (userName && sName && (sName.includes(userName) || userName.includes(sName)))
+      );
+    });
+
     const totalDurationSeconds = userSessions.reduce((acc, s) => acc + (s.durationSeconds || 0), 0);
     const lastSession = userSessions[0];
 

@@ -15,8 +15,10 @@ import {
   AlertTriangle,
   RotateCcw,
   Cloud,
+  CloudUpload,
   ExternalLink,
   Loader2,
+  CheckCircle,
   CheckCircle2,
   X,
 } from 'lucide-react';
@@ -44,7 +46,7 @@ import { TranscriptPanel } from './TranscriptPanel';
 import type { Marker } from '../Markers/MarkerList';
 import { MarkerList } from '../Markers/MarkerList';
 import { SoundboardPanel } from './SoundboardPanel';
-import { getAutoUploadToDrive, uploadAudioBlobToDrive } from '../../auth/GoogleDriveUploader';
+import { getAutoUploadToDrive, uploadAudioBlobToDrive, DEFAULT_FOLDER_URL } from '../../auth/GoogleDriveUploader';
 
 interface PodcastStudioProps {
   guestNameParam?: string;
@@ -361,10 +363,70 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     }
   }, [isPaused]);
 
+  const handleManualUploadToDrive = useCallback(async () => {
+    const buf = audioBuffer || bufferA || bufferB;
+    if (!buf) {
+      alert('No recorded audio available to upload.');
+      return;
+    }
+
+    const dur = Math.round(buf.duration) || Math.round(elapsedRef.current / 1000) || 1;
+    const title = `Podcast Session ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    const sanitized = title.replace(/\s+/g, '_');
+    const stereoBlob = encodeWav(buf, 32);
+
+    setDriveUpload({
+      isUploading: true,
+      progress: 10,
+      stageText: 'Uploading audio to Google Drive...',
+      sessionTitle: title,
+    });
+
+    try {
+      const res = await uploadAudioBlobToDrive({
+        blob: stereoBlob,
+        fileName: `${sanitized}_manual.wav`,
+        sessionTitle: title,
+        hostName: hostDisplayNameRef.current,
+        guestName: guestDisplayNameRef.current,
+        durationSeconds: dur,
+        onProgress: (pct, stage) => {
+          setDriveUpload({ isUploading: true, progress: pct, stageText: stage, sessionTitle: title });
+        },
+      });
+
+      if (res.success) {
+        setDriveUpload({
+          isUploading: false,
+          progress: 100,
+          stageText: 'Session audio uploaded to Google Drive!',
+          fileUrl: res.fileUrl,
+          sessionTitle: title,
+        });
+      } else {
+        setDriveUpload({
+          isUploading: false,
+          progress: 0,
+          stageText: 'Google Drive upload notice: ' + (res.error || 'Check Google Drive Webhook'),
+          error: res.error,
+          sessionTitle: title,
+        });
+      }
+    } catch (e: any) {
+      setDriveUpload({
+        isUploading: false,
+        progress: 0,
+        stageText: 'Upload failed: ' + (e?.message || 'Network error'),
+        error: e?.message || 'Network error',
+        sessionTitle: title,
+      });
+    }
+  }, [audioBuffer, bufferA, bufferB]);
+
   const handleStop = useCallback(() => {
     const bA = engineA.current?.stopRecording() || null;
     const bB = engineB.current?.stopRecording() || null;
-    const finalDurationSeconds = Math.round(elapsedRef.current / 1000);
+    const finalDurationSeconds = Math.max(1, Math.round(elapsedRef.current / 1000));
 
     setIsRecording(false);
     setIsPaused(false);
@@ -380,9 +442,17 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       compiled = bA;
     } else if (bB) {
       compiled = bB;
-    } else if (engineA.current?.audioContext) {
-      const dur = Math.max(1, finalDurationSeconds);
-      compiled = engineA.current.audioContext.createBuffer(2, dur * 44100, 44100);
+    }
+
+    if (!compiled) {
+      try {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        const fallbackCtx = engineA.current?.audioContext || new AudioCtx();
+        const dur = Math.max(1, finalDurationSeconds);
+        compiled = fallbackCtx.createBuffer(2, Math.max(44100, dur * 44100), 44100);
+      } catch (e) {
+        console.warn('Fallback buffer creation error:', e);
+      }
     }
 
     sttEngine.current?.stop();
@@ -391,17 +461,22 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     if (compiled) {
       setAudioBuffer(compiled);
 
+      const calculatedDuration = Math.max(1, finalDurationSeconds || Math.round(compiled.duration));
+
       // Automatically log recording session to SessionStore for Admin Reports
       const savedSession = saveRecordingSession({
         hostId: currentUser?.id || 'usr_host',
-        hostName: hostDisplayNameRef.current,
+        hostName: hostDisplayNameRef.current || currentUser?.name || 'Sarah Connor (Host)',
         hostEmail: currentUser?.email || 'host@studio.local',
-        guestName: guestDisplayNameRef.current,
+        guestName: guestDisplayNameRef.current || 'Guest Speaker',
         title: `Podcast Session ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
-        durationSeconds: finalDurationSeconds || Math.round(compiled.duration) || 1,
+        durationSeconds: calculatedDuration,
         channelCount: compiled.numberOfChannels,
         format: 'WAV 32-bit Float',
       });
+
+      // Dispatch storage update so any open Admin tabs update in real-time
+      window.dispatchEvent(new Event('storage'));
 
       // Save raw binary WAV blobs to CloudAudioStore (IndexedDB) for Admin Audio Stem Export
       try {
@@ -442,11 +517,12 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
                 fileUrl: res.fileUrl,
                 sessionTitle: savedSession.title,
               });
+              window.dispatchEvent(new Event('storage'));
             } else {
               setDriveUpload({
                 isUploading: false,
                 progress: 0,
-                stageText: 'Google Drive upload error',
+                stageText: 'Google Drive auto-upload: ' + (res.error || 'Check Drive settings'),
                 error: res.error,
                 sessionTitle: savedSession.title,
               });
@@ -465,7 +541,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         console.error('Failed saving session audio blob:', err);
       }
     }
-  }, [currentUser?.id, currentUser?.email]);
+  }, [currentUser?.id, currentUser?.email, currentUser?.name]);
 
   const handleAddMarker = useCallback((time: number) => {
     setMarkers((prev) => [
@@ -912,6 +988,111 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
         {/* Studio Soundboard SFX Trigger Bar */}
         <SoundboardPanel audioContext={engineA.current?.audioContext || null} />
+
+        {/* Google Drive Cloud Sync & Upload Bar */}
+        {hasAudio && (
+          <div
+            style={{
+              background: 'linear-gradient(135deg, rgba(0, 240, 255, 0.08), rgba(9, 13, 22, 0.95))',
+              border: '1px solid rgba(0, 240, 255, 0.25)',
+              borderRadius: '8px',
+              padding: '10px 16px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '12px',
+              flexWrap: 'wrap',
+              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <CloudUpload size={18} color="var(--accent-cyan)" />
+              <div>
+                <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.5px' }}>
+                  GOOGLE DRIVE CLOUD STORAGE SYNC
+                </div>
+                <div style={{ fontSize: '0.7rem', color: driveUpload?.error ? 'var(--accent-red)' : driveUpload?.progress === 100 ? 'var(--accent-green)' : 'var(--text-secondary)' }}>
+                  {driveUpload?.stageText || (driveUpload?.progress === 100 ? '✓ Synced to Google Drive' : 'Ready to upload recorded master audio')}
+                </div>
+              </div>
+            </div>
+
+            {driveUpload?.isUploading && (
+              <div style={{ flex: 1, minWidth: '160px', maxWidth: '320px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', color: 'var(--accent-cyan)', marginBottom: '3px' }}>
+                  <span>Uploading to Google Drive...</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{driveUpload.progress}%</span>
+                </div>
+                <div style={{ width: '100%', height: '5px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden' }}>
+                  <div style={{ width: `${driveUpload.progress}%`, height: '100%', background: 'var(--accent-cyan)', transition: 'width 0.3s ease' }} />
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {driveUpload?.fileUrl && (
+                <a
+                  href={driveUpload.fileUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn-transport"
+                  style={{
+                    background: 'rgba(0, 255, 135, 0.15)',
+                    borderColor: 'rgba(0, 255, 135, 0.4)',
+                    color: 'var(--accent-green)',
+                    padding: '5px 12px',
+                    fontSize: '0.72rem',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    textDecoration: 'none',
+                    borderRadius: '6px',
+                    fontWeight: 600,
+                  }}
+                >
+                  <CheckCircle size={13} /> Open in Google Drive <ExternalLink size={10} />
+                </a>
+              )}
+
+              <button
+                className="btn-transport btn-cyan"
+                onClick={handleManualUploadToDrive}
+                disabled={driveUpload?.isUploading}
+                style={{
+                  padding: '5px 12px',
+                  fontSize: '0.72rem',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  borderRadius: '6px',
+                }}
+              >
+                {driveUpload?.isUploading ? <Loader2 size={13} className="animate-spin" /> : <CloudUpload size={13} />}
+                {driveUpload?.isUploading ? `Uploading (${driveUpload.progress}%)` : 'Upload to Google Drive'}
+              </button>
+
+              <a
+                href={DEFAULT_FOLDER_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="btn-transport"
+                style={{
+                  padding: '5px 10px',
+                  fontSize: '0.72rem',
+                  color: 'var(--text-secondary)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  textDecoration: 'none',
+                  borderRadius: '6px',
+                }}
+                title="Open Google Drive Destination Folder"
+              >
+                Drive Folder <ExternalLink size={10} />
+              </a>
+            </div>
+          </div>
+        )}
 
         {/* Center: Multi-track Waveform Timeline */}
         <section className="podcast-editor-area">

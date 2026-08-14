@@ -706,13 +706,14 @@ export const AdminPanel: React.FC = () => {
                     <tbody>
                       {sessions
                         .filter((s) => {
+                          const q = (searchQuery || '').toLowerCase();
                           const matchesQuery =
-                            !searchQuery ||
-                            s.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                            s.hostName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                            s.guestName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                            s.hostEmail.toLowerCase().includes(searchQuery.toLowerCase());
-                          const matchesFormat = filterFormat === 'all' || s.format.toLowerCase().includes(filterFormat.toLowerCase());
+                            !q ||
+                            (s.title || '').toLowerCase().includes(q) ||
+                            (s.hostName || '').toLowerCase().includes(q) ||
+                            (s.guestName || '').toLowerCase().includes(q) ||
+                            (s.hostEmail || '').toLowerCase().includes(q);
+                          const matchesFormat = filterFormat === 'all' || (s.format || '').toLowerCase().includes(filterFormat.toLowerCase());
                           return matchesQuery && matchesFormat;
                         })
                         .map((s) => (

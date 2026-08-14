@@ -76,7 +76,8 @@ export function setGoogleDriveFolderUrl(url: string): void {
 }
 
 export function getAutoUploadToDrive(): boolean {
-  return localStorage.getItem(STORAGE_KEY_AUTO_UPLOAD) === 'true';
+  const val = localStorage.getItem(STORAGE_KEY_AUTO_UPLOAD);
+  return val === null ? true : val === 'true';
 }
 
 export function setAutoUploadToDrive(enabled: boolean): void {
