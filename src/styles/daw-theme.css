@@ -35,7 +35,11 @@
   --shadow-glow-red: 0 0 20px rgba(255, 42, 95, 0.35);
 }
 
-html {
+html, body, #root {
+  min-height: 100vh;
+  width: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
   scroll-behavior: smooth;
 }
 
@@ -43,9 +47,6 @@ body {
   background-color: var(--bg-darkest);
   color: var(--text-primary);
   font-family: var(--font-sans);
-  overflow-x: hidden;
-  overflow-y: auto;
-  min-height: 100vh;
   -webkit-font-smoothing: antialiased;
 }
 
