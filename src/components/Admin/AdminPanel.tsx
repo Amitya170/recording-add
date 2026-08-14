@@ -32,7 +32,6 @@ import {
   Play,
   Pause,
   CloudUpload,
-  ExternalLink,
   Copy,
   Check,
   HelpCircle,
@@ -806,29 +805,23 @@ export const AdminPanel: React.FC = () => {
                                   </div>
                                 </div>
                               ) : s.driveFileUrl ? (
-                                <a
-                                  href={s.driveFileUrl}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="btn-transport"
+                                <span
                                   style={{
                                     padding: '4px 10px',
-                                    height: 'auto',
                                     fontSize: '0.72rem',
                                     fontWeight: 600,
                                     background: 'rgba(0, 255, 135, 0.12)',
                                     color: 'var(--accent-green)',
-                                    borderColor: 'rgba(0, 255, 135, 0.4)',
-                                    textDecoration: 'none',
+                                    border: '1px solid rgba(0, 255, 135, 0.3)',
                                     display: 'inline-flex',
                                     alignItems: 'center',
                                     gap: '5px',
                                     borderRadius: '6px',
                                   }}
-                                  title="Recorded audio uploaded to Google Drive. Click to open file in Drive."
+                                  title="Audio successfully uploaded to Google Drive"
                                 >
-                                  <CheckCircle size={13} /> Uploaded to Drive <ExternalLink size={10} />
-                                </a>
+                                  <CheckCircle size={13} /> Uploaded to Drive
+                                </span>
                               ) : (
                                 <button
                                   className="btn-transport"
@@ -936,27 +929,13 @@ export const AdminPanel: React.FC = () => {
 
                 <div className="login-field">
                   <label>GOOGLE DRIVE FOLDER LINK (OPTIONAL)</label>
-                  <div style={{ display: 'flex', gap: '6px' }}>
-                    <input
-                      className="daw-input"
-                      value={driveFolderUrl}
-                      onChange={(e) => setDriveFolderUrl(e.target.value)}
-                      placeholder="https://drive.google.com/drive/folders/..."
-                      style={{ fontSize: '0.72rem', flex: 1 }}
-                    />
-                    {driveFolderUrl && (
-                      <a
-                        href={driveFolderUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="btn-transport"
-                        style={{ padding: '4px 8px', height: 'auto', display: 'flex', alignItems: 'center' }}
-                        title="Open Google Drive Folder in new tab"
-                      >
-                        <ExternalLink size={13} />
-                      </a>
-                    )}
-                  </div>
+                  <input
+                    className="daw-input"
+                    value={driveFolderUrl}
+                    onChange={(e) => setDriveFolderUrl(e.target.value)}
+                    placeholder="https://drive.google.com/drive/folders/..."
+                    style={{ fontSize: '0.72rem', width: '100%' }}
+                  />
                 </div>
 
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.74rem', color: 'var(--text-primary)', cursor: 'pointer', margin: '4px 0' }}>

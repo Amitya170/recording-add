@@ -1,6 +1,5 @@
 import React from 'react';
-import { CheckCircle2, AlertTriangle, ExternalLink, X, FolderOpen, RefreshCw } from 'lucide-react';
-import { DEFAULT_FOLDER_URL } from '../../auth/GoogleDriveUploader';
+import { CheckCircle2, AlertTriangle, X, RefreshCw } from 'lucide-react';
 
 export interface DriveUploadNotificationProps {
   type: 'success' | 'error';
@@ -17,7 +16,6 @@ export const DriveUploadNotificationModal: React.FC<DriveUploadNotificationProps
   type,
   title,
   message,
-  fileUrl,
   error,
   sessionTitle,
   onClose,
@@ -157,53 +155,6 @@ export const DriveUploadNotificationModal: React.FC<DriveUploadNotificationProps
 
         {/* Action Buttons */}
         <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-          {isSuccess && fileUrl && (
-            <a
-              href={fileUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="btn-transport"
-              style={{
-                background: 'rgba(0, 255, 135, 0.18)',
-                border: '1px solid rgba(0, 255, 135, 0.5)',
-                color: 'var(--accent-green)',
-                padding: '8px 16px',
-                fontSize: '0.82rem',
-                fontWeight: 600,
-                borderRadius: '8px',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                textDecoration: 'none',
-              }}
-            >
-              <ExternalLink size={14} /> Open File in Google Drive
-            </a>
-          )}
-
-          {isSuccess && (
-            <a
-              href={DEFAULT_FOLDER_URL}
-              target="_blank"
-              rel="noreferrer"
-              className="btn-transport"
-              style={{
-                background: 'rgba(0, 240, 255, 0.1)',
-                border: '1px solid rgba(0, 240, 255, 0.3)',
-                color: 'var(--accent-cyan)',
-                padding: '8px 14px',
-                fontSize: '0.82rem',
-                borderRadius: '8px',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                textDecoration: 'none',
-              }}
-            >
-              <FolderOpen size={14} /> Open Drive Folder
-            </a>
-          )}
-
           {!isSuccess && onRetry && (
             <button
               className="btn-transport btn-cyan"
@@ -222,17 +173,16 @@ export const DriveUploadNotificationModal: React.FC<DriveUploadNotificationProps
           )}
 
           <button
-            className="btn-transport"
+            className="btn-transport btn-cyan"
             onClick={onClose}
             style={{
-              padding: '8px 14px',
+              padding: '8px 20px',
               fontSize: '0.82rem',
               borderRadius: '8px',
-              background: 'rgba(255, 255, 255, 0.08)',
-              borderColor: 'rgba(255, 255, 255, 0.15)',
+              fontWeight: 600,
             }}
           >
-            Close
+            {isSuccess ? '✓ Got It' : 'Close'}
           </button>
         </div>
       </div>

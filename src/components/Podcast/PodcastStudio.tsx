@@ -17,10 +17,8 @@ import {
   RotateCcw,
   Cloud,
   CloudUpload,
-  ExternalLink,
-  Loader2,
   CheckCircle,
-  CheckCircle2,
+  Loader2,
   X,
 } from 'lucide-react';
 import { useAuth } from '../../auth/AuthContext';
@@ -50,7 +48,6 @@ import { SoundboardPanel } from './SoundboardPanel';
 import {
   getAutoUploadToDrive,
   uploadAudioBlobToDrive,
-  DEFAULT_FOLDER_URL,
   getGoogleDriveWebhookUrl,
   setGoogleDriveWebhookUrl,
   APPS_SCRIPT_TEMPLATE,
@@ -976,28 +973,6 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
               </div>
             </div>
 
-            {driveUpload.fileUrl && (
-              <a
-                href={driveUpload.fileUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="btn-transport"
-                style={{
-                  background: 'rgba(0, 255, 135, 0.15)',
-                  borderColor: 'rgba(0, 255, 135, 0.4)',
-                  color: 'var(--accent-green)',
-                  padding: '4px 12px',
-                  height: 'auto',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  textDecoration: 'none'
-                }}
-              >
-                <ExternalLink size={13} /> Open in Google Drive
-              </a>
-            )}
-
             <button
               onClick={() => setDriveUpload(null)}
               style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '2px' }}
@@ -1133,30 +1108,6 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
             )}
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              {driveUpload?.fileUrl && (
-                <a
-                  href={driveUpload.fileUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="btn-transport"
-                  style={{
-                    background: 'rgba(0, 255, 135, 0.15)',
-                    borderColor: 'rgba(0, 255, 135, 0.4)',
-                    color: 'var(--accent-green)',
-                    padding: '5px 12px',
-                    fontSize: '0.72rem',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '5px',
-                    textDecoration: 'none',
-                    borderRadius: '6px',
-                    fontWeight: 600,
-                  }}
-                >
-                  <CheckCircle size={13} /> Open in Google Drive <ExternalLink size={10} />
-                </a>
-              )}
-
               <button
                 className="btn-transport btn-cyan"
                 onClick={handleManualUploadToDrive}
@@ -1173,26 +1124,6 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
                 {driveUpload?.isUploading ? <Loader2 size={13} className="animate-spin" /> : <CloudUpload size={13} />}
                 {driveUpload?.isUploading ? `Uploading (${driveUpload.progress}%)` : 'Upload to Google Drive'}
               </button>
-
-              <a
-                href={DEFAULT_FOLDER_URL}
-                target="_blank"
-                rel="noreferrer"
-                className="btn-transport"
-                style={{
-                  padding: '5px 10px',
-                  fontSize: '0.72rem',
-                  color: 'var(--text-secondary)',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  textDecoration: 'none',
-                  borderRadius: '6px',
-                }}
-                title="Open Google Drive Destination Folder"
-              >
-                Drive Folder <ExternalLink size={10} />
-              </a>
 
               <button
                 type="button"
@@ -1408,24 +1339,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
             </div>
           )}
 
-          {driveUpload.fileUrl && (
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '2px' }}>
-              <a
-                href={driveUpload.fileUrl}
-                target="_blank"
-                rel="noreferrer"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  fontSize: '0.75rem',
-                  color: 'var(--accent-green)',
-                  textDecoration: 'none',
-                  fontWeight: 600,
-                }}
-              >
-                <CheckCircle2 size={13} /> Open in Google Drive <ExternalLink size={11} />
-              </a>
+          {driveUpload.progress === 100 && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '2px', fontSize: '0.72rem', color: 'var(--accent-green)', fontWeight: 600 }}>
+              ✓ Saved to Cloud
             </div>
           )}
         </div>
