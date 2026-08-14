@@ -9,6 +9,7 @@ import {
   generateCombinedMetadataJSON,
   generateCombinedMetadataTXT,
   generateSessionsCSV,
+  updateSessionDriveStatus,
   type RecordingSession,
   type UserDurationReport,
 } from '../../auth/SessionStore';
@@ -70,7 +71,6 @@ export const AdminPanel: React.FC = () => {
 
   const [storageInfo, setStorageInfo] = useState({ usedMb: 0, limitMb: 5120 });
   const [previewingSessionId, setPreviewingSessionId] = useState<string | null>(null);
-  const [previewAudioUrl, setPreviewAudioUrl] = useState<string | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Google Drive Cloud Storage Settings State
@@ -81,6 +81,7 @@ export const AdminPanel: React.FC = () => {
   const [showScriptGuideModal, setShowScriptGuideModal] = useState(false);
   const [copiedScript, setCopiedScript] = useState(false);
   const [uploadingSessionId, setUploadingSessionId] = useState<string | null>(null);
+  const [uploadProgressMap, setUploadProgressMap] = useState<Record<string, { progress: number; stageText: string }>>({});
   const [driveUploadMessage, setDriveUploadMessage] = useState<{ id: string; success: boolean; text: string; url?: string } | null>(null);
 
   useEffect(() => {
@@ -119,12 +120,12 @@ export const AdminPanel: React.FC = () => {
         let bufB = mainBuf;
 
         if (stored.speakerABlob) {
-          const aArr = await stored.speakerABlob.arrayBuffer();
-          bufA = await ctx.decodeAudioData(aArr);
+          const arrA = await stored.speakerABlob.arrayBuffer();
+          bufA = await ctx.decodeAudioData(arrA);
         }
         if (stored.speakerBBlob) {
-          const bArr = await stored.speakerBBlob.arrayBuffer();
-          bufB = await ctx.decodeAudioData(bArr);
+          const arrB = await stored.speakerBBlob.arrayBuffer();
+          bufB = await ctx.decodeAudioData(arrB);
         }
 
         setExportModalSession({
@@ -133,50 +134,60 @@ export const AdminPanel: React.FC = () => {
           speakerABuffer: bufA,
           speakerBBuffer: bufB,
         });
-        return;
       } catch (err) {
-        console.error('Error decoding stored IndexedDB WAV blob:', err);
+        console.error('Error decoding audio blobs for export modal:', err);
       }
+    } else {
+      const bufs = createAudioBuffersForSession(session);
+      setExportModalSession({
+        session,
+        audioBuffer: bufs.audioBuffer,
+        speakerABuffer: bufs.speakerABuffer,
+        speakerBBuffer: bufs.speakerBBuffer,
+      });
     }
-
-    // Fallback if IndexedDB blob is absent
-    const bufs = createAudioBuffersForSession(session);
-    setExportModalSession({
-      session,
-      audioBuffer: bufs.audioBuffer,
-      speakerABuffer: bufs.speakerABuffer,
-      speakerBBuffer: bufs.speakerBBuffer,
-    });
   };
 
   const handleTogglePreviewAudio = async (session: RecordingSession) => {
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+    }
+
     if (previewingSessionId === session.id) {
-      if (previewAudioRef.current) {
-        previewAudioRef.current.pause();
-      }
       setPreviewingSessionId(null);
       return;
     }
 
+    let blobToPlay: Blob | null = null;
     const stored = await getSessionAudioBlobs(session.id);
     if (stored && stored.stereoBlob) {
-      if (previewAudioUrl) URL.revokeObjectURL(previewAudioUrl);
-      const url = URL.createObjectURL(stored.stereoBlob);
-      setPreviewAudioUrl(url);
-      setPreviewingSessionId(session.id);
-      setTimeout(() => {
-        previewAudioRef.current?.play().catch((e) => console.warn('Audio audition error:', e));
-      }, 50);
+      blobToPlay = stored.stereoBlob;
     } else {
       const bufs = createAudioBuffersForSession(session);
-      const blob = encodeWav(bufs.audioBuffer, 16);
-      if (previewAudioUrl) URL.revokeObjectURL(previewAudioUrl);
-      const url = URL.createObjectURL(blob);
-      setPreviewAudioUrl(url);
+      blobToPlay = encodeWav(bufs.audioBuffer, 16);
+    }
+
+    if (blobToPlay) {
+      const url = URL.createObjectURL(blobToPlay);
+      const audio = new Audio(url);
+      previewAudioRef.current = audio;
       setPreviewingSessionId(session.id);
-      setTimeout(() => {
-        previewAudioRef.current?.play().catch((e) => console.warn('Audio audition error:', e));
-      }, 50);
+
+      audio.onended = () => {
+        setPreviewingSessionId(null);
+        URL.revokeObjectURL(url);
+      };
+
+      audio.onerror = () => {
+        setPreviewingSessionId(null);
+        URL.revokeObjectURL(url);
+      };
+
+      audio.play().catch((err) => {
+        console.warn('Playback error:', err);
+        setPreviewingSessionId(null);
+      });
     }
   };
 
@@ -248,6 +259,10 @@ export const AdminPanel: React.FC = () => {
     }
 
     setUploadingSessionId(session.id);
+    setUploadProgressMap((prev) => ({
+      ...prev,
+      [session.id]: { progress: 5, stageText: 'Preparing audio file...' },
+    }));
     setDriveUploadMessage(null);
 
     let blobToUpload: Blob;
@@ -270,13 +285,21 @@ export const AdminPanel: React.FC = () => {
         hostName: session.hostName,
         guestName: session.guestName,
         durationSeconds: session.durationSeconds,
+        onProgress: (pct, stage) => {
+          setUploadProgressMap((prev) => ({
+            ...prev,
+            [session.id]: { progress: pct, stageText: stage },
+          }));
+        },
       });
 
       if (res.success && res.fileUrl) {
+        updateSessionDriveStatus(session.id, res.fileUrl);
+        refreshData();
         setDriveUploadMessage({
           id: session.id,
           success: true,
-          text: 'Uploaded to Drive!',
+          text: 'Uploaded to Google Drive (100%)',
           url: res.fileUrl,
         });
       } else {
@@ -664,6 +687,7 @@ export const AdminPanel: React.FC = () => {
                         <th>HOST SPEAKER</th>
                         <th>GUEST SPEAKER</th>
                         <th>DURATION</th>
+                        <th>GOOGLE DRIVE</th>
                         <th>DATE RECORDED</th>
                         <th>FORMAT</th>
                         <th>METADATA & EXPORT</th>
@@ -711,6 +735,50 @@ export const AdminPanel: React.FC = () => {
                             <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)', fontWeight: 700 }}>
                               {formatDuration(s.durationSeconds)}
                             </td>
+                            <td>
+                              {uploadingSessionId === s.id ? (
+                                <div style={{ minWidth: '110px' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.68rem', color: 'var(--accent-cyan)' }}>
+                                    <Loader2 size={11} className="animate-spin" />
+                                    <span>{uploadProgressMap[s.id]?.progress || 0}%</span>
+                                  </div>
+                                  <div style={{ width: '100%', height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', marginTop: '3px' }}>
+                                    <div style={{ width: `${uploadProgressMap[s.id]?.progress || 0}%`, height: '100%', background: 'var(--accent-cyan)', borderRadius: '2px' }} />
+                                  </div>
+                                </div>
+                              ) : s.driveFileUrl ? (
+                                <a
+                                  href={s.driveFileUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="btn-transport"
+                                  style={{
+                                    padding: '3px 8px',
+                                    height: 'auto',
+                                    fontSize: '0.68rem',
+                                    background: 'rgba(0, 255, 135, 0.1)',
+                                    color: 'var(--accent-green)',
+                                    borderColor: 'rgba(0, 255, 135, 0.3)',
+                                    textDecoration: 'none',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px'
+                                  }}
+                                  title="Recorded audio uploaded to Google Drive. Click to open."
+                                >
+                                  <CheckCircle size={11} /> In Drive <ExternalLink size={9} />
+                                </a>
+                              ) : (
+                                <button
+                                  className="btn-transport"
+                                  style={{ padding: '3px 8px', height: 'auto', fontSize: '0.68rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                  onClick={() => handleUploadSessionToDrive(s)}
+                                  title="Upload audio to Google Drive"
+                                >
+                                  <CloudUpload size={11} /> Upload
+                                </button>
+                              )}
+                            </td>
                             <td style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
                               {new Date(s.createdAt).toLocaleString()}
                             </td>
@@ -726,23 +794,6 @@ export const AdminPanel: React.FC = () => {
                                   title="Inspect Full Technical Audio Metadata"
                                 >
                                   <FileCode size={12} style={{ marginRight: '4px' }} /> Meta
-                                </button>
-                                <button
-                                  className="btn-transport"
-                                  style={{ padding: '4px 8px', height: 'auto', fontSize: '0.7rem', background: 'rgba(0, 255, 135, 0.1)', color: 'var(--accent-green)', borderColor: 'rgba(0, 255, 135, 0.3)' }}
-                                  onClick={() => handleUploadSessionToDrive(s)}
-                                  disabled={uploadingSessionId === s.id}
-                                  title="Upload this recorded audio directly to your Google Drive folder"
-                                >
-                                  {uploadingSessionId === s.id ? (
-                                    <>
-                                      <Loader2 size={12} className="animate-spin" style={{ marginRight: '4px' }} /> Uploading...
-                                    </>
-                                  ) : (
-                                    <>
-                                      <CloudUpload size={12} style={{ marginRight: '4px' }} /> Drive
-                                    </>
-                                  )}
                                 </button>
                                 <button
                                   className="btn-transport btn-cyan"
@@ -1001,7 +1052,6 @@ export const AdminPanel: React.FC = () => {
       {/* Hidden Audio Element for Auditioning Session Audio */}
       <audio
         ref={previewAudioRef}
-        src={previewAudioUrl || undefined}
         onEnded={() => setPreviewingSessionId(null)}
         style={{ display: 'none' }}
       />

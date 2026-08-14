@@ -34,6 +34,8 @@ export interface RecordingSession {
   recordingDeviceA?: string; // Microphone A hardware name
   recordingDeviceB?: string; // Microphone B hardware name
   cueMarkers?: CueMarkerItem[];
+  driveFileUrl?: string; // Google Drive direct URL
+  driveUploadedAt?: string; // Timestamp when uploaded to Drive
 }
 
 export interface UserDurationReport {
@@ -61,6 +63,16 @@ export function getStoredSessions(): RecordingSession[] {
     return raw ? JSON.parse(raw) : [];
   } catch {
     return [];
+  }
+}
+
+export function updateSessionDriveStatus(sessionId: string, driveFileUrl: string): void {
+  const sessions = getStoredSessions();
+  const index = sessions.findIndex((s) => s.id === sessionId);
+  if (index !== -1) {
+    sessions[index].driveFileUrl = driveFileUrl;
+    sessions[index].driveUploadedAt = new Date().toISOString();
+    localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
   }
 }
 

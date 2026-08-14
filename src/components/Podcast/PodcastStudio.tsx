@@ -14,9 +14,14 @@ import {
   MessageSquare,
   AlertTriangle,
   RotateCcw,
+  Cloud,
+  ExternalLink,
+  Loader2,
+  CheckCircle2,
+  X,
 } from 'lucide-react';
 import { useAuth } from '../../auth/AuthContext';
-import { saveRecordingSession } from '../../auth/SessionStore';
+import { saveRecordingSession, updateSessionDriveStatus } from '../../auth/SessionStore';
 import { saveSessionAudioBlobs } from '../../auth/CloudAudioStore';
 import {
   getPendingRecoverySession,
@@ -89,6 +94,16 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
   useEffect(() => {
     isRecordingRef.current = isRecording;
   }, [isRecording]);
+
+  // Google Drive Live Upload Progress State
+  const [driveUpload, setDriveUpload] = useState<{
+    isUploading: boolean;
+    progress: number;
+    stageText: string;
+    fileUrl?: string;
+    error?: string;
+    sessionTitle?: string;
+  } | null>(null);
 
   // WebRTC P2P & FX Rack State
   const [webrtcStatus, setWebrtcStatus] = useState<WebRTCStatus>({
@@ -374,6 +389,13 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         // Auto-upload recorded audio directly to Google Drive folder if enabled
         if (getAutoUploadToDrive()) {
           const sanitized = savedSession.title.replace(/\s+/g, '_');
+          setDriveUpload({
+            isUploading: true,
+            progress: 5,
+            stageText: 'Starting Google Drive auto-upload (0%)...',
+            sessionTitle: savedSession.title,
+          });
+
           uploadAudioBlobToDrive({
             blob: stereoBlob,
             fileName: `${sanitized}_${savedSession.id.slice(0, 8)}.wav`,
@@ -381,11 +403,39 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
             hostName: savedSession.hostName,
             guestName: savedSession.guestName,
             durationSeconds: savedSession.durationSeconds,
+            onProgress: (pct, stage) => {
+              setDriveUpload((prev) => (prev ? { ...prev, isUploading: true, progress: pct, stageText: stage } : null));
+            },
           }).then((res) => {
-            if (res.success && res.fileUrl) {
-              console.log('✅ Session audio auto-uploaded to Google Drive:', res.fileUrl);
+            if (res.success) {
+              if (res.fileUrl) {
+                updateSessionDriveStatus(savedSession.id, res.fileUrl);
+              }
+              setDriveUpload({
+                isUploading: false,
+                progress: 100,
+                stageText: 'Session audio uploaded to Google Drive!',
+                fileUrl: res.fileUrl,
+                sessionTitle: savedSession.title,
+              });
+            } else {
+              setDriveUpload({
+                isUploading: false,
+                progress: 0,
+                stageText: 'Google Drive upload error',
+                error: res.error,
+                sessionTitle: savedSession.title,
+              });
             }
-          }).catch((e) => console.warn('Google Drive auto-upload failed:', e));
+          }).catch((e) => {
+            setDriveUpload({
+              isUploading: false,
+              progress: 0,
+              stageText: 'Google Drive auto-upload failed',
+              error: e?.message || 'Unknown network error',
+              sessionTitle: savedSession.title,
+            });
+          });
         }
       } catch (err) {
         console.error('Failed saving session audio blob:', err);
@@ -871,6 +921,95 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
       {/* Hidden Live WebRTC Remote Guest Audio Element for Bi-Directional Call Playback */}
       <audio ref={remoteAudioRef} autoPlay style={{ display: 'none' }} />
+
+      {/* Real-Time Google Drive Upload Progress Banner */}
+      {driveUpload && (
+        <div style={{
+          position: 'fixed',
+          bottom: '24px',
+          right: '24px',
+          zIndex: 9999,
+          background: 'rgba(18, 22, 34, 0.95)',
+          border: `1px solid ${driveUpload.error ? 'var(--accent-red)' : driveUpload.progress === 100 ? 'var(--accent-green)' : 'var(--accent-cyan)'}`,
+          borderRadius: '10px',
+          padding: '14px 18px',
+          boxShadow: '0 8px 30px rgba(0, 0, 0, 0.6)',
+          backdropFilter: 'blur(12px)',
+          minWidth: '320px',
+          maxWidth: '420px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '8px',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '0.82rem' }}>
+              {driveUpload.isUploading ? (
+                <Loader2 size={16} className="animate-spin" color="var(--accent-cyan)" />
+              ) : (
+                <Cloud size={16} color={driveUpload.error ? 'var(--accent-red)' : 'var(--accent-green)'} />
+              )}
+              <span>
+                {driveUpload.isUploading
+                  ? `Uploading to Google Drive (${driveUpload.progress}%)`
+                  : driveUpload.progress === 100
+                  ? 'Uploaded to Google Drive'
+                  : 'Google Drive Sync Error'}
+              </span>
+            </div>
+            <button
+              onClick={() => setDriveUpload(null)}
+              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0 }}
+              title="Close"
+            >
+              <X size={14} />
+            </button>
+          </div>
+
+          <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
+            {driveUpload.sessionTitle && <div style={{ fontWeight: 500, color: 'var(--text-primary)', marginBottom: '2px' }}>{driveUpload.sessionTitle}</div>}
+            <div>{driveUpload.stageText}</div>
+            {driveUpload.error && (
+              <div style={{ color: 'var(--accent-red)', marginTop: '4px', fontSize: '0.7rem' }}>
+                {driveUpload.error}
+              </div>
+            )}
+          </div>
+
+          {/* Progress bar */}
+          {driveUpload.isUploading && (
+            <div style={{ width: '100%', height: '6px', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '3px', overflow: 'hidden' }}>
+              <div style={{
+                width: `${driveUpload.progress}%`,
+                height: '100%',
+                background: 'linear-gradient(90deg, var(--accent-cyan), var(--accent-green))',
+                borderRadius: '3px',
+                transition: 'width 0.2s ease',
+              }} />
+            </div>
+          )}
+
+          {driveUpload.fileUrl && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '2px' }}>
+              <a
+                href={driveUpload.fileUrl}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  fontSize: '0.75rem',
+                  color: 'var(--accent-green)',
+                  textDecoration: 'none',
+                  fontWeight: 600,
+                }}
+              >
+                <CheckCircle2 size={13} /> Open in Google Drive <ExternalLink size={11} />
+              </a>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };

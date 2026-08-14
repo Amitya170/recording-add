@@ -23,6 +23,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   // Google Drive Upload State
   const [isUploadingDrive, setIsUploadingDrive] = useState(false);
+  const [driveProgress, setDriveProgress] = useState<{ pct: number; stage: string }>({ pct: 0, stage: '' });
   const [driveUploadSuccess, setDriveUploadSuccess] = useState<{ url: string; fileName: string } | null>(null);
   const [driveUploadError, setDriveUploadError] = useState<string | null>(null);
 
@@ -80,6 +81,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     }
 
     setIsUploadingDrive(true);
+    setDriveProgress({ pct: 5, stage: 'Preparing audio...' });
     setDriveUploadError(null);
     setDriveUploadSuccess(null);
 
@@ -94,6 +96,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         sessionTitle: title,
         hostName: artist,
         durationSeconds: Math.round(duration),
+        onProgress: (pct, stage) => {
+          setDriveProgress({ pct, stage });
+        },
       });
 
       if (res.success && res.fileUrl) {
@@ -216,7 +221,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           >
             {isUploadingDrive ? (
               <>
-                <Loader2 size={14} className="animate-spin" /> Uploading to Drive...
+                <Loader2 size={14} className="animate-spin" /> Uploading to Drive ({driveProgress.pct}%)...
               </>
             ) : (
               <>

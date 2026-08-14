@@ -109,6 +109,7 @@ export interface UploadResult {
 
 /**
  * Upload a recorded audio blob directly to the user's Google Drive folder
+ * with real-time percentage progress tracking.
  */
 export async function uploadAudioBlobToDrive(params: {
   blob: Blob;
@@ -117,6 +118,7 @@ export async function uploadAudioBlobToDrive(params: {
   hostName?: string;
   guestName?: string;
   durationSeconds?: number;
+  onProgress?: (progressPercent: number, stageText: string) => void;
 }): Promise<UploadResult> {
   const webhookUrl = getGoogleDriveWebhookUrl();
   if (!webhookUrl) {
@@ -127,7 +129,10 @@ export async function uploadAudioBlobToDrive(params: {
   }
 
   try {
+    params.onProgress?.(5, 'Encoding WAV audio data...');
     const base64Audio = await blobToBase64(params.blob);
+    params.onProgress?.(15, 'Preparing upload payload...');
+
     const payload = {
       fileName: params.fileName,
       mimeType: params.blob.type || 'audio/wav',
@@ -142,33 +147,80 @@ export async function uploadAudioBlobToDrive(params: {
       },
     };
 
-    // Google Apps Script accepts text/plain to avoid CORS preflight failures
-    const response = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'text/plain;charset=utf-8',
-      },
-      body: JSON.stringify(payload),
-    });
+    const payloadString = JSON.stringify(payload);
 
-    const data = await response.json();
-    if (data.status === 'success' || data.fileUrl) {
-      return {
-        success: true,
-        fileUrl: data.fileUrl,
-        fileId: data.fileId,
-        fileName: data.fileName || params.fileName,
+    return new Promise((resolve) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', webhookUrl);
+      xhr.setRequestHeader('Content-Type', 'text/plain;charset=utf-8');
+
+      // Real network transmission progress (15% -> 85%)
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const ratio = event.loaded / event.total;
+          const pct = Math.round(15 + ratio * 70); // 15% to 85%
+          const loadedMb = (event.loaded / (1024 * 1024)).toFixed(1);
+          const totalMb = (event.total / (1024 * 1024)).toFixed(1);
+          params.onProgress?.(pct, `Uploading to Google Drive (${pct}% — ${loadedMb} / ${totalMb} MB)...`);
+        }
       };
-    } else {
-      return {
-        success: false,
-        error: data.message || 'Failed saving audio file to Google Drive folder.',
+
+      xhr.onload = () => {
+        params.onProgress?.(92, 'Finalizing Google Drive cloud file...');
+        try {
+          const data = JSON.parse(xhr.responseText);
+          if (data.status === 'success' || data.fileUrl) {
+            params.onProgress?.(100, 'Upload complete! File saved in Google Drive.');
+            resolve({
+              success: true,
+              fileUrl: data.fileUrl,
+              fileId: data.fileId,
+              fileName: data.fileName || params.fileName,
+            });
+          } else {
+            resolve({
+              success: false,
+              error: data.message || 'Failed saving audio file to Google Drive folder.',
+            });
+          }
+        } catch {
+          // If response was not valid JSON, check HTTP status
+          if (xhr.status >= 200 && xhr.status < 300) {
+            params.onProgress?.(100, 'Upload complete!');
+            resolve({
+              success: true,
+              fileName: params.fileName,
+            });
+          } else {
+            resolve({
+              success: false,
+              error: `Google Apps Script returned HTTP ${xhr.status}: ${xhr.statusText}`,
+            });
+          }
+        }
       };
-    }
+
+      xhr.onerror = () => {
+        resolve({
+          success: false,
+          error: 'Network connection failed while uploading to Google Drive.',
+        });
+      };
+
+      xhr.ontimeout = () => {
+        resolve({
+          success: false,
+          error: 'Google Drive upload request timed out.',
+        });
+      };
+
+      params.onProgress?.(20, 'Connecting to Google Drive...');
+      xhr.send(payloadString);
+    });
   } catch (err: any) {
     return {
       success: false,
-      error: err?.message || 'Network error communicating with Google Drive Webhook.',
+      error: err?.message || 'Unexpected error during Google Drive upload.',
     };
   }
 }
