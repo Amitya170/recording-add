@@ -315,7 +315,7 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
             <span>
               {webrtcStatus.connected
                 ? 'CONNECTED TO HOST LIVE (P2P CALL ACTIVE — AUDIO STREAMING)'
-                : 'WAITING FOR HOST TO START RECORDING SESSION...'}
+                : 'CONNECTING TO HOST LIVE... (If the Host created a new invite link, please join using the newest link)'}
             </span>
           </div>
 

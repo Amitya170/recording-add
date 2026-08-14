@@ -4,10 +4,16 @@ import { X, Copy, CheckCircle, Mail, UserPlus, Link2 } from 'lucide-react';
 interface GuestInviteModalProps {
   hostName: string;
   sessionToken?: string;
+  onSessionTokenChange?: (newToken: string) => void;
   onClose: () => void;
 }
 
-export const GuestInviteModal: React.FC<GuestInviteModalProps> = ({ hostName, sessionToken, onClose }) => {
+export const GuestInviteModal: React.FC<GuestInviteModalProps> = ({
+  hostName,
+  sessionToken,
+  onSessionTokenChange,
+  onClose,
+}) => {
   const [guestName, setGuestName] = useState('');
   const [guestEmail, setGuestEmail] = useState('');
   const [inviteLink, setInviteLink] = useState('');
@@ -15,23 +21,31 @@ export const GuestInviteModal: React.FC<GuestInviteModalProps> = ({ hostName, se
   const [copied, setCopied] = useState(false);
 
   // Helper to generate cryptographically random unique invite link
-  const createUniqueLink = (name: string) => {
+  const createUniqueLink = (name: string, forceNewSession: boolean = false) => {
     const uniqueInvCode = 'inv_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
-    const sessionId = sessionToken || ('room_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8));
+    const safeHost = (hostName || 'host').toLowerCase().replace(/[^a-z0-9]/g, '_');
+    const newSessionId = forceNewSession
+      ? `room_${safeHost}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`
+      : (sessionToken || `room_${safeHost}_${Date.now().toString(36)}`);
+
     const baseUrl = window.location.origin + window.location.pathname;
-    const link = `${baseUrl}?session=${sessionId}&guest=${encodeURIComponent(name.trim() || 'Guest Speaker')}&host=${encodeURIComponent(hostName)}&inv=${uniqueInvCode}`;
+    const link = `${baseUrl}?session=${newSessionId}&guest=${encodeURIComponent(name.trim() || 'Guest Speaker')}&host=${encodeURIComponent(hostName)}&inv=${uniqueInvCode}`;
     setInviteId(uniqueInvCode);
     setInviteLink(link);
+
+    if (forceNewSession && onSessionTokenChange) {
+      onSessionTokenChange(newSessionId);
+    }
   };
 
-  // Auto-generate a unique invite link on initial render
+  // Generate invite link on initial render using active host room
   React.useEffect(() => {
-    createUniqueLink(guestName);
+    createUniqueLink(guestName, false);
   }, []);
 
   const handleGenerateLink = (e: React.FormEvent) => {
     e.preventDefault();
-    createUniqueLink(guestName);
+    createUniqueLink(guestName, false);
   };
 
   const handleCopyLink = () => {
@@ -118,11 +132,11 @@ export const GuestInviteModal: React.FC<GuestInviteModalProps> = ({ hostName, se
               <button
                 type="button"
                 className="btn-transport"
-                onClick={() => createUniqueLink(guestName)}
+                onClick={() => createUniqueLink(guestName, true)}
                 style={{ flex: 1, fontSize: '0.75rem', padding: '6px 12px' }}
-                title="Generate another unique invite link with fresh security token"
+                title="Invalidate old link and generate a brand new unique session link"
               >
-                🎲 Generate New Unique Link
+                🎲 Invalidate Old & Generate New Link
               </button>
             </div>
 
