@@ -179,12 +179,18 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       }
     };
     rEngine.onRemoteStream = async (remoteStream) => {
-      // PRIMARY playback path: audio element (most reliable, lowest latency)
+      console.log('[Host] Remote guest stream attached, tracks:', remoteStream.getAudioTracks().length);
+      // PRIMARY playback path: audio element (lowest latency, direct headphone output)
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
-        remoteAudioRef.current.muted = isMutedB;
-        remoteAudioRef.current.volume = isMutedB ? 0 : Math.min(1, Math.max(0, gainB));
-        remoteAudioRef.current.play().catch((e) => console.warn('Autoplay error:', e));
+        remoteAudioRef.current.volume = 1.0;
+        remoteAudioRef.current.muted = false;
+        try {
+          await remoteAudioRef.current.play();
+          console.log('[Host] Remote guest audio playback started successfully');
+        } catch (e) {
+          console.warn('[Host] Remote audio playback autoplay prevented:', e);
+        }
       }
       // SECONDARY path: engine for waveform visualizer & PCM recording only (no speaker output)
       if (engineB.current) {

@@ -206,11 +206,23 @@ export class WebRTCAudioEngine {
       this.updateStatus('Guest Connected ✓ — Audio Call Active', true);
 
       call.on('stream', (remoteStream) => {
-        console.log('[WebRTC] Host: received guest audio stream', remoteStream.id);
+        console.log('[WebRTC] Host: received guest audio stream', remoteStream.id, 'tracks:', remoteStream.getAudioTracks().length);
         this.remoteStream = remoteStream;
         this.updateStatus('Guest Connected ✓ — Audio Live', true);
         this.onRemoteStream?.(remoteStream);
       });
+
+      // Attach to RTCPeerConnection ontrack for real-time track replacement detection
+      const pc = (call as any).peerConnection as RTCPeerConnection;
+      if (pc) {
+        pc.ontrack = (event) => {
+          console.log('[WebRTC] Host: ontrack event:', event.track.id, event.streams.length);
+          const stream = event.streams[0] || new MediaStream([event.track]);
+          this.remoteStream = stream;
+          this.updateStatus('Guest Connected ✓ — Audio Live', true);
+          this.onRemoteStream?.(stream);
+        };
+      }
 
       call.on('close', () => {
         console.log('[WebRTC] Host: guest audio call closed');
@@ -285,12 +297,24 @@ export class WebRTCAudioEngine {
       this.mediaConn = call;
 
       call.on('stream', (remoteStream) => {
-        console.log('[WebRTC] Guest: received host audio stream', remoteStream.id);
+        console.log('[WebRTC] Guest: received host audio stream', remoteStream.id, 'tracks:', remoteStream.getAudioTracks().length);
         this.remoteStream = remoteStream;
         this.stopGuestCallLoop();
         this.updateStatus('Connected to Host ✓ (Host Audio Live)', true);
         this.onRemoteStream?.(remoteStream);
       });
+
+      const pc = (call as any).peerConnection as RTCPeerConnection;
+      if (pc) {
+        pc.ontrack = (event) => {
+          console.log('[WebRTC] Guest: ontrack event:', event.track.id);
+          const stream = event.streams[0] || new MediaStream([event.track]);
+          this.remoteStream = stream;
+          this.stopGuestCallLoop();
+          this.updateStatus('Connected to Host ✓ (Host Audio Live)', true);
+          this.onRemoteStream?.(stream);
+        };
+      }
 
       call.on('close', () => {
         this.handleDisconnect('Host audio stream closed');
@@ -326,15 +350,17 @@ export class WebRTCAudioEngine {
           try {
             await audioSender.replaceTrack(audioTrack);
             console.log(`[WebRTC] ${this.role} replaced active audio track successfully`);
-            return;
           } catch (e) {
-            console.warn('[WebRTC] replaceTrack failed, triggering call reconnect:', e);
+            console.warn('[WebRTC] replaceTrack failed:', e);
           }
         }
       }
     }
 
-    if (this.role === 'guest' && this.isConnected) {
+    // On Guest, if we now have the real live microphone stream, place a fresh call to Host
+    // to guarantee Host audio element receives the real hardware mic stream
+    if (this.role === 'guest' && this.peer && !this.peer.destroyed && !this.isDisposed) {
+      console.log('[WebRTC] Guest: re-calling host with real microphone stream…');
       this.attemptGuestCall();
     }
   }
