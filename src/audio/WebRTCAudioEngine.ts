@@ -1,8 +1,20 @@
 /**
- * WebRTCAudioEngine — Real-Time Peer-to-Peer Audio Connection Engine.
- * Manages RTCPeerConnection for low-latency, dual-mono audio streaming
- * between remote Host and Guest speakers with automatic signaling and candidate queuing.
+ * WebRTCAudioEngine — Cross-Device P2P Audio via PeerJS.
+ *
+ * Uses PeerJS (backed by a free hosted signaling server) so that Host and Guest
+ * can connect across different machines / networks — unlike BroadcastChannel which
+ * only works within the same browser on the same machine.
+ *
+ * Protocol:
+ *   Host  → registers with a deterministic peer ID: `pcs_host_<sessionToken>`
+ *   Guest → registers with a random peer ID, then calls the host's peer ID
+ *
+ * Connections per session:
+ *   1x MediaConnection  — for audio (host mic ↔ guest mic)
+ *   1x DataConnection   — for control signals (recording state, mute, etc.)
  */
+
+import Peer, { type DataConnection, type MediaConnection } from 'peerjs';
 
 export interface WebRTCStatus {
   connected: boolean;
@@ -11,325 +23,298 @@ export interface WebRTCStatus {
   statusText: string;
 }
 
+// Make session token safe for use as a PeerJS peer ID
+function safePeerId(raw: string): string {
+  return raw.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
+}
+
 export class WebRTCAudioEngine {
-  private peerConnection: RTCPeerConnection | null = null;
-  private channel: BroadcastChannel | null = null;
-  private remoteStream: MediaStream | null = null;
+  private peer: Peer | null = null;
+  private mediaConn: MediaConnection | null = null;
+  private dataConn: DataConnection | null = null;
   private localStream: MediaStream | null = null;
-  private pendingCandidates: RTCIceCandidateInit[] = [];
-  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private remoteStream: MediaStream | null = null;
+  private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+  private sessionToken: string;
+  private isDisposed = false;
 
   public role: 'host' | 'guest';
+  public isConnected: boolean = false;
   public onStatusChange?: (status: WebRTCStatus) => void;
   public onRemoteStream?: (stream: MediaStream) => void;
-  public onSignal?: (message: any) => void;
+  public onSignal?: (message: unknown) => void;
 
-  public isConnected: boolean = false;
   private statusText: string = 'Idle';
 
   constructor(role: 'host' | 'guest', sessionToken: string = 'podcast_default_session') {
     this.role = role;
-    this.channel = new BroadcastChannel(`webrtc_session_${sessionToken}`);
-    this.initChannel();
-    this.startPresenceHeartbeat();
+    this.sessionToken = safePeerId(sessionToken);
+    this.initPeer();
   }
 
-  public sendSignal(message: any) {
-    if (this.channel) {
-      this.channel.postMessage({ type: 'CUSTOM_SIGNAL', data: message });
+  // ──────────────────────────────────────────────────────────────
+  // PeerJS Initialisation
+  // ──────────────────────────────────────────────────────────────
+
+  private initPeer() {
+    if (this.isDisposed) return;
+
+    // Host gets a deterministic ID so guest can call it by name
+    const peerId = this.role === 'host'
+      ? `pcs_host_${this.sessionToken}`
+      : undefined; // guest gets a random ID
+
+    this.updateStatus(this.role === 'host'
+      ? 'Waiting for Guest to Join…'
+      : 'Connecting to Host…');
+
+    try {
+      this.peer = new Peer(peerId as string, {
+        host: '0.peerjs.com',
+        port: 443,
+        path: '/',
+        secure: true,
+        debug: 0,
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            {
+              urls: 'turn:openrelay.metered.ca:80',
+              username: 'openrelayproject',
+              credential: 'openrelayproject',
+            },
+            {
+              urls: 'turn:openrelay.metered.ca:443',
+              username: 'openrelayproject',
+              credential: 'openrelayproject',
+            },
+          ],
+        },
+      });
+    } catch (e) {
+      console.error('[PeerJS] Peer creation error:', e);
+      this.updateStatus('Failed to initialise — retrying…');
+      this.scheduleReconnect(5000);
+      return;
     }
+
+    this.peer.on('open', (id) => {
+      console.log(`[PeerJS] ${this.role} open — peer ID: ${id}`);
+      if (this.role === 'host') {
+        this.updateStatus('Waiting for Guest to Join…');
+        this.listenAsHost();
+      } else {
+        this.updateStatus('Calling Host…');
+        this.connectToHost();
+      }
+    });
+
+    this.peer.on('error', (err) => {
+      console.warn(`[PeerJS] ${this.role} peer error:`, err.type, err.message);
+      switch (err.type) {
+        case 'unavailable-id':
+          // Another host tab has the same ID — OK, just wait
+          this.updateStatus('Session active elsewhere — waiting…');
+          break;
+        case 'peer-unavailable':
+          this.updateStatus('Host not online yet — retrying…');
+          this.scheduleReconnect(3000);
+          break;
+        case 'network':
+        case 'disconnected':
+        case 'server-error':
+          this.updateStatus('Network error — reconnecting…');
+          this.scheduleReconnect(4000);
+          break;
+        default:
+          this.updateStatus(`Connection issue (${err.type}) — retrying…`);
+          this.scheduleReconnect(5000);
+      }
+    });
+
+    this.peer.on('disconnected', () => {
+      if (!this.isConnected && !this.isDisposed) {
+        this.updateStatus('Disconnected from server — reconnecting…');
+        // Try to reconnect to PeerJS server (not to peer)
+        try { this.peer?.reconnect(); } catch {}
+        this.scheduleReconnect(4000);
+      }
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // HOST: listen for incoming calls and data connections
+  // ──────────────────────────────────────────────────────────────
+
+  private listenAsHost() {
+    if (!this.peer) return;
+
+    // Handle incoming audio call from guest
+    this.peer.on('call', (call) => {
+      console.log('[PeerJS] Host answering call from:', call.peer);
+      this.mediaConn = call;
+
+      // Answer with host's local stream (sends host audio to guest)
+      call.answer(this.localStream ?? new MediaStream());
+
+      call.on('stream', (remoteStream) => {
+        console.log('[PeerJS] Host received guest audio stream');
+        this.remoteStream = remoteStream;
+        this.updateStatus('Connected ✓ — Guest Audio Live', true);
+        this.onRemoteStream?.(remoteStream);
+      });
+
+      call.on('close', () => this.handleDisconnect('Guest disconnected'));
+      call.on('error', (e) => console.warn('[PeerJS] Host call error:', e));
+    });
+
+    // Handle incoming data channel from guest
+    this.peer.on('connection', (conn) => {
+      console.log('[PeerJS] Host data connection from:', conn.peer);
+      this.dataConn = conn;
+      conn.on('data', (data) => {
+        if (this.onSignal) this.onSignal(data);
+      });
+      conn.on('error', (e) => console.warn('[PeerJS] Host data connection error:', e));
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // GUEST: call host and open a data channel
+  // ──────────────────────────────────────────────────────────────
+
+  private connectToHost() {
+    if (!this.peer || this.isDisposed) return;
+
+    const hostId = `pcs_host_${this.sessionToken}`;
+    console.log('[PeerJS] Guest calling host:', hostId);
+
+    // 1. Audio call (sends guest mic to host; receives host mic back)
+    const call = this.peer.call(hostId, this.localStream ?? new MediaStream());
+    if (!call) {
+      console.warn('[PeerJS] peer.call() returned null — host may not be online');
+      this.updateStatus('Host not available — retrying…');
+      this.scheduleReconnect(3000);
+      return;
+    }
+    this.mediaConn = call;
+
+    call.on('stream', (remoteStream) => {
+      console.log('[PeerJS] Guest received host audio stream');
+      this.remoteStream = remoteStream;
+      this.updateStatus('Connected ✓ — Host Audio Live', true);
+      this.onRemoteStream?.(remoteStream);
+    });
+
+    call.on('close', () => this.handleDisconnect('Host disconnected — retrying…'));
+    call.on('error', (e) => {
+      console.warn('[PeerJS] Guest call error:', e);
+      this.scheduleReconnect(4000);
+    });
+
+    // 2. Data channel (for recording state signals from host)
+    const conn = this.peer.connect(hostId, { reliable: true });
+    this.dataConn = conn;
+    conn.on('open', () => console.log('[PeerJS] Guest data channel open'));
+    conn.on('data', (data) => {
+      if (this.onSignal) this.onSignal(data);
+    });
+    conn.on('error', (e) => console.warn('[PeerJS] Guest data connection error:', e));
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // Public API
+  // ──────────────────────────────────────────────────────────────
+
+  /**
+   * Set (or replace) the local mic stream.
+   * Guest: re-calls the host with the new stream.
+   * Host: stream is used on the next incoming call answer.
+   */
+  public async setLocalStream(stream: MediaStream): Promise<void> {
+    this.localStream = stream;
+    const tracks = stream.getAudioTracks();
+    console.log(`[PeerJS] ${this.role} setLocalStream — ${tracks.length} audio tracks`);
+
+    if (this.role === 'guest' && this.peer && !this.peer.destroyed && !this.isDisposed) {
+      // Re-call host with the updated stream
+      this.connectToHost();
+    }
+    // Host: new stream will be used on next call.answer() automatically
+  }
+
+  /**
+   * Send a control signal to the remote peer via the DataConnection.
+   * (e.g. recording state changes so the guest starts/stops recording)
+   */
+  public sendSignal(message: unknown): void {
+    if (this.dataConn && this.dataConn.open) {
+      try {
+        this.dataConn.send(message);
+      } catch (e) {
+        console.warn('[PeerJS] sendSignal failed:', e);
+      }
+    } else {
+      console.warn('[PeerJS] sendSignal called but data channel not open');
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // Internal helpers
+  // ──────────────────────────────────────────────────────────────
+
+  private handleDisconnect(msg: string) {
+    if (this.isDisposed) return;
+    this.isConnected = false;
+    this.updateStatus(msg, false);
+    if (this.role === 'guest') {
+      this.scheduleReconnect(5000);
+    }
+  }
+
+  private scheduleReconnect(delayMs: number = 4000) {
+    if (this.isDisposed) return;
+    if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
+    this.reconnectTimeout = setTimeout(() => {
+      if (this.isDisposed || this.isConnected) return;
+      console.log(`[PeerJS] Reconnect attempt as ${this.role}…`);
+      if (this.peer && !this.peer.destroyed) {
+        if (this.role === 'guest') {
+          this.connectToHost();
+        }
+        // Host just waits for next incoming call
+      } else {
+        // Peer is gone — re-initialise entirely
+        try { this.peer?.destroy(); } catch {}
+        this.peer = null;
+        this.initPeer();
+      }
+    }, delayMs);
   }
 
   private updateStatus(text: string, connected: boolean = false) {
     this.statusText = text;
     this.isConnected = connected;
-    if (this.onStatusChange) {
-      this.onStatusChange({
-        connected: this.isConnected,
-        role: this.role,
-        remoteStream: this.remoteStream,
-        statusText: this.statusText,
-      });
-    }
-  }
-
-  private startPresenceHeartbeat() {
-    this.heartbeatInterval = setInterval(() => {
-      if (!this.isConnected && this.channel) {
-        if (this.role === 'guest') {
-          this.channel.postMessage({ type: 'JOIN_REQUEST', role: 'guest' });
-        } else {
-          this.channel.postMessage({ type: 'HOST_ONLINE', role: 'host' });
-        }
-      }
-    }, 1500);
-  }
-
-  private initChannel() {
-    if (!this.channel) return;
-
-    this.channel.onmessage = async (event) => {
-      const { type, data } = event.data || {};
-
-      if (type === 'CUSTOM_SIGNAL' && this.onSignal) {
-        this.onSignal(data);
-      } else if (type === 'HOST_ONLINE' && this.role === 'guest') {
-        if (!this.isConnected) {
-          if (this.peerConnection && this.peerConnection.connectionState !== 'connected') {
-            try {
-              this.peerConnection.close();
-            } catch {}
-            this.peerConnection = null;
-          }
-          this.channel?.postMessage({ type: 'JOIN_REQUEST', role: 'guest' });
-        }
-      } else if (type === 'JOIN_REQUEST' && this.role === 'host') {
-        // Guest joined, cleanly re-initialize peer connection and create a fresh offer
-        if (this.peerConnection) {
-          try {
-            this.peerConnection.close();
-          } catch {}
-          this.peerConnection = null;
-        }
-        this.setupPeerConnection();
-        await this.createOffer();
-      } else if (type === 'OFFER' && this.role === 'guest') {
-        await this.handleOffer(data);
-      } else if (type === 'ANSWER' && this.role === 'host') {
-        await this.handleAnswer(data);
-      } else if (type === 'ICE_CANDIDATE') {
-        if (data) {
-          if (this.peerConnection && this.peerConnection.remoteDescription) {
-            try {
-              await this.peerConnection.addIceCandidate(new RTCIceCandidate(data));
-            } catch (e) {
-              console.warn('addIceCandidate error:', e);
-            }
-          } else {
-            this.pendingCandidates.push(data);
-          }
-        }
-      }
-    };
-
-    if (this.role === 'guest') {
-      this.updateStatus('Connecting to Host...', false);
-      setTimeout(() => {
-        this.channel?.postMessage({ type: 'JOIN_REQUEST', role: 'guest' });
-      }, 300);
-    } else {
-      this.updateStatus('Waiting for Remote Guest...', false);
-      setTimeout(() => {
-        this.channel?.postMessage({ type: 'HOST_ONLINE', role: 'host' });
-      }, 300);
-    }
-  }
-
-  private setupPeerConnection(): RTCPeerConnection {
-    if (this.peerConnection) return this.peerConnection;
-
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-      ],
+    this.onStatusChange?.({
+      connected,
+      role: this.role,
+      remoteStream: this.remoteStream,
+      statusText: text,
     });
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        const candidateJSON = {
-          candidate: event.candidate.candidate,
-          sdpMid: event.candidate.sdpMid,
-          sdpMLineIndex: event.candidate.sdpMLineIndex,
-          usernameFragment: event.candidate.usernameFragment,
-        };
-        try {
-          this.channel?.postMessage({
-            type: 'ICE_CANDIDATE',
-            data: JSON.parse(JSON.stringify(candidateJSON)),
-          });
-        } catch (err) {
-          console.warn('Failed to post ICE candidate:', err);
-        }
-      }
-    };
-
-    pc.ontrack = (event) => {
-      const stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
-      this.remoteStream = stream;
-      this.updateStatus('Connected (WebRTC Audio Live)', true);
-      if (this.onRemoteStream) {
-        this.onRemoteStream(stream);
-      }
-    };
-
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'connected') {
-        this.updateStatus('Connected (WebRTC Audio Live)', true);
-      } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-        this.updateStatus('Disconnected — Reconnecting...', false);
-      }
-    };
-
-    // Add a sendrecv transceiver so SDP always negotiates bidirectional audio.
-    // This must happen BEFORE createOffer/createAnswer so the SDP includes it.
-    // If a local stream is already available, we set its track on the transceiver immediately.
-    const transceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
-    if (this.localStream) {
-      const audioTrack = this.localStream.getAudioTracks()[0];
-      if (audioTrack) {
-        transceiver.sender.replaceTrack(audioTrack).catch(console.warn);
-      }
-    }
-
-    this.peerConnection = pc;
-    return pc;
-  }
-
-  private async flushPendingCandidates() {
-    if (!this.peerConnection || !this.peerConnection.remoteDescription) return;
-    while (this.pendingCandidates.length > 0) {
-      const candidate = this.pendingCandidates.shift();
-      if (candidate) {
-        try {
-          await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (e) {
-          console.warn('Error flushing ICE candidate:', e);
-        }
-      }
-    }
-  }
-
-  public async setLocalStream(stream: MediaStream) {
-    this.localStream = stream;
-    const pc = this.peerConnection || this.setupPeerConnection();
-
-    const audioTrack = stream.getAudioTracks()[0];
-    if (!audioTrack) {
-      console.warn('setLocalStream: No audio track found in stream');
-      return;
-    }
-
-    // Use the transceiver sender for the most reliable track replacement
-    const transceivers = pc.getTransceivers();
-    const audioTransceiver = transceivers.find((t) => t.sender.track?.kind === 'audio' || t.receiver.track?.kind === 'audio');
-    if (audioTransceiver) {
-      try {
-        await audioTransceiver.sender.replaceTrack(audioTrack);
-        console.log(`[WebRTC] ${this.role} local track replaced via transceiver`);
-      } catch (e) {
-        console.warn('replaceTrack via transceiver failed, using addTrack:', e);
-        try { pc.addTrack(audioTrack, stream); } catch {}
-      }
-    } else {
-      // Fallback: add track directly (less ideal but functional)
-      try { pc.addTrack(audioTrack, stream); } catch {}
-    }
-
-    // If host is already in stable state, renegotiate
-    if (this.role === 'host' && pc.signalingState === 'stable') {
-      await this.createOffer();
-    }
-  }
-
-  public async replaceLocalTrack(newTrack: MediaStreamTrack): Promise<void> {
-    if (!this.peerConnection) return;
-    const senders = this.peerConnection.getSenders();
-    const sender = senders.find((s) => s.track && s.track.kind === 'audio');
-    if (sender) {
-      await sender.replaceTrack(newTrack);
-    } else if (this.localStream) {
-      this.peerConnection.addTrack(newTrack, this.localStream);
-    }
-  }
-
-  public async createOffer() {
-    const pc = this.peerConnection || this.setupPeerConnection();
-    try {
-      if (pc.signalingState !== 'stable') {
-        console.warn('Cannot create offer in non-stable signaling state:', pc.signalingState);
-        return;
-      }
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      this.channel?.postMessage({
-        type: 'OFFER',
-        data: {
-          type: offer.type,
-          sdp: offer.sdp,
-        },
-      });
-      this.updateStatus('Signaling Remote Guest...', false);
-    } catch (e) {
-      console.error('Error creating WebRTC offer:', e);
-    }
-  }
-
-  private async handleOffer(offerSDP: RTCSessionDescriptionInit) {
-    const pc = this.peerConnection || this.setupPeerConnection();
-    try {
-      // Attach local track via transceiver sender BEFORE setting remote description
-      if (this.localStream) {
-        const audioTrack = this.localStream.getAudioTracks()[0];
-        if (audioTrack) {
-          const transceivers = pc.getTransceivers();
-          const audioTransceiver = transceivers.find(
-            (t) => t.sender.track?.kind === 'audio' || t.receiver.track?.kind === 'audio'
-          );
-          if (audioTransceiver) {
-            await audioTransceiver.sender.replaceTrack(audioTrack).catch(console.warn);
-          } else {
-            try { pc.addTrack(audioTrack, this.localStream); } catch {}
-          }
-        }
-      }
-
-      await pc.setRemoteDescription(new RTCSessionDescription(offerSDP));
-      await this.flushPendingCandidates();
-
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      this.channel?.postMessage({
-        type: 'ANSWER',
-        data: {
-          type: answer.type,
-          sdp: answer.sdp,
-        },
-      });
-      this.updateStatus('Connected (WebRTC Audio Live)', true);
-    } catch (e) {
-      console.error('Error handling WebRTC offer:', e);
-    }
-  }
-
-  private async handleAnswer(answerSDP: RTCSessionDescriptionInit) {
-    if (this.peerConnection) {
-      try {
-        if (this.peerConnection.signalingState === 'have-local-offer') {
-          await this.peerConnection.setRemoteDescription(new RTCSessionDescription(answerSDP));
-          await this.flushPendingCandidates();
-          this.updateStatus('Connected (WebRTC Audio Live)', true);
-        }
-      } catch (e) {
-        console.error('Error handling WebRTC answer:', e);
-      }
-    }
   }
 
   public dispose() {
-    if (this.heartbeatInterval) {
-      clearInterval(this.heartbeatInterval);
-      this.heartbeatInterval = null;
+    this.isDisposed = true;
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
     }
-    if (this.peerConnection) {
-      this.peerConnection.close();
-      this.peerConnection = null;
-    }
-    if (this.channel) {
-      this.channel.close();
-      this.channel = null;
-    }
+    try { this.mediaConn?.close(); } catch {}
+    try { this.dataConn?.close(); } catch {}
+    try { this.peer?.destroy(); } catch {}
+    this.peer = null;
+    this.mediaConn = null;
+    this.dataConn = null;
   }
 }
-
