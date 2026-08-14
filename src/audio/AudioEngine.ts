@@ -92,8 +92,21 @@ export class SpeakerAudioEngine {
       this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     }
 
+    if (this.ctx.state === 'suspended') {
+      await this.ctx.resume();
+    }
+
     if (this.sourceNode) this.sourceNode.disconnect();
     this.sourceNode = this.ctx.createMediaStreamSource(this.stream);
+
+    // Audio Graph: sourceNode -> noiseEngine -> fxRack -> gainNode -> analyserEngine
+    if (this.noiseEngine) {
+      this.sourceNode.connect(this.noiseEngine.inputNode);
+    } else if (this.fxRack) {
+      this.sourceNode.connect(this.fxRack.inputNode);
+    } else {
+      this.sourceNode.connect(this.gainNode!);
+    }
 
     if (this.scriptNode) {
       this.scriptNode.disconnect();
@@ -104,11 +117,9 @@ export class SpeakerAudioEngine {
 
       // Metering & recording with applied gain
       let peak = 0, sumSq = 0;
-      const gain = this.isMuted ? 0 : this.userGain;
-
       const processed = new Float32Array(rawInput.length);
       for (let i = 0; i < rawInput.length; i++) {
-        const val = rawInput[i] * gain;
+        const val = rawInput[i];
         processed[i] = val;
         const abs = Math.abs(val);
         if (abs > peak) peak = abs;
@@ -125,22 +136,21 @@ export class SpeakerAudioEngine {
       }
     };
 
-    if (this.noiseEngine) {
-      this.sourceNode.connect(this.noiseEngine.inputNode);
-    } else if (this.fxRack) {
-      this.sourceNode.connect(this.fxRack.inputNode);
-    } else {
-      this.sourceNode.connect(this.gainNode!);
-    }
-    this.sourceNode.connect(this.scriptNode);
-    this.scriptNode.connect(this.ctx.destination);
+    // Feed gain-adjusted signal to scriptNode for recording & visual metering
+    this.gainNode!.connect(this.scriptNode);
+
+    // Keep scriptProcessor active without duplicate audio output
+    const silentSink = this.ctx.createGain();
+    silentSink.gain.value = 0;
+    this.scriptNode.connect(silentSink);
+    silentSink.connect(this.ctx.destination);
   }
 
   public async startMediaStream(stream: MediaStream): Promise<void> {
     if (!this.ctx) throw new Error('Engine not initialized');
 
-    if (this.stream) {
-      this.stream.getTracks().forEach((t) => t.stop());
+    if (this.ctx.state === 'suspended') {
+      await this.ctx.resume();
     }
 
     this.stream = stream;
@@ -148,6 +158,15 @@ export class SpeakerAudioEngine {
     if (this.sourceNode) this.sourceNode.disconnect();
     this.sourceNode = this.ctx.createMediaStreamSource(this.stream);
 
+    // Audio Graph: sourceNode -> noiseEngine -> fxRack -> gainNode -> analyserEngine
+    if (this.noiseEngine) {
+      this.sourceNode.connect(this.noiseEngine.inputNode);
+    } else if (this.fxRack) {
+      this.sourceNode.connect(this.fxRack.inputNode);
+    } else {
+      this.sourceNode.connect(this.gainNode!);
+    }
+
     if (this.scriptNode) {
       this.scriptNode.disconnect();
     }
@@ -157,11 +176,9 @@ export class SpeakerAudioEngine {
 
       // Metering & recording with applied gain
       let peak = 0, sumSq = 0;
-      const gain = this.isMuted ? 0 : this.userGain;
-
       const processed = new Float32Array(rawInput.length);
       for (let i = 0; i < rawInput.length; i++) {
-        const val = rawInput[i] * gain;
+        const val = rawInput[i];
         processed[i] = val;
         const abs = Math.abs(val);
         if (abs > peak) peak = abs;
@@ -178,15 +195,14 @@ export class SpeakerAudioEngine {
       }
     };
 
-    if (this.noiseEngine) {
-      this.sourceNode.connect(this.noiseEngine.inputNode);
-    } else if (this.fxRack) {
-      this.sourceNode.connect(this.fxRack.inputNode);
-    } else {
-      this.sourceNode.connect(this.gainNode!);
-    }
-    this.sourceNode.connect(this.scriptNode);
-    this.scriptNode.connect(this.ctx.destination);
+    // Feed gain-adjusted signal to scriptNode for recording & visual metering
+    this.gainNode!.connect(this.scriptNode);
+
+    // Keep scriptProcessor active without duplicate audio output
+    const silentSink = this.ctx.createGain();
+    silentSink.gain.value = 0;
+    this.scriptNode.connect(silentSink);
+    silentSink.connect(this.ctx.destination);
   }
 
   public setNoiseSuppression(enabled: boolean): void {

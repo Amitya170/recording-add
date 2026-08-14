@@ -122,6 +122,19 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
         remoteAudioRef.current.play().catch((e) => console.warn('Guest autoplay prevented:', e));
       }
     };
+    rEngine.onSignal = (sig) => {
+      if (sig?.type === 'RECORDING_STATE') {
+        if (sig.isRecording) {
+          if (sig.isPaused) {
+            engineGuest.current?.pauseRecording();
+          } else {
+            engineGuest.current?.startRecording();
+          }
+        } else {
+          engineGuest.current?.stopRecording();
+        }
+      }
+    };
     webrtcEngine.current = rEngine;
 
     // Live Speech Recognition

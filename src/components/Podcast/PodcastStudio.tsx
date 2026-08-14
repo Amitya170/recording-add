@@ -85,6 +85,11 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
 
+  const isRecordingRef = useRef(false);
+  useEffect(() => {
+    isRecordingRef.current = isRecording;
+  }, [isRecording]);
+
   // WebRTC P2P & FX Rack State
   const [webrtcStatus, setWebrtcStatus] = useState<WebRTCStatus>({
     connected: false,
@@ -190,11 +195,14 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         setIsConnectedB(true);
       }
     };
-    rEngine.onRemoteStream = (remoteStream) => {
+    rEngine.onRemoteStream = async (remoteStream) => {
       // Connect remote guest stream into engineB for waveform visualizer & recording
       if (engineB.current) {
-        engineB.current.startMediaStream(remoteStream);
+        await engineB.current.startMediaStream(remoteStream);
         setIsConnectedB(true);
+        if (isRecordingRef.current) {
+          engineB.current.startRecording();
+        }
       }
       // Play remote guest voice live through host speakers/headphones
       if (remoteAudioRef.current) {
@@ -279,10 +287,16 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
   }, [isRecording, isPaused]);
 
   // Recording Actions
-  const handleStartRecord = useCallback(() => {
-    if (!isConnectedA && !isConnectedB) {
-      alert('Please select at least one microphone input device before starting the recording.');
+  const handleStartRecord = useCallback(async () => {
+    if (!isConnectedA && !isConnectedB && !webrtcStatus.connected) {
+      alert('Please connect your microphone before starting the recording.');
       return;
+    }
+    if (engineA.current?.audioContext?.state === 'suspended') {
+      await engineA.current.audioContext.resume();
+    }
+    if (engineB.current?.audioContext?.state === 'suspended') {
+      await engineB.current.audioContext.resume();
     }
     engineA.current?.startRecording();
     engineB.current?.startRecording();
@@ -292,17 +306,22 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
     // Start Live Speech-to-Text Engine
     sttEngine.current?.start(hostDisplayNameRef.current, 'host');
-  }, [isConnectedA, isConnectedB]);
+
+    // Inform guest speaker that recording has started
+    webrtcEngine.current?.sendSignal({ type: 'RECORDING_STATE', isRecording: true });
+  }, [isConnectedA, isConnectedB, webrtcStatus.connected]);
 
   const handlePause = useCallback(() => {
     if (isPaused) {
       engineA.current?.resumeRecording();
       engineB.current?.resumeRecording();
       setIsPaused(false);
+      webrtcEngine.current?.sendSignal({ type: 'RECORDING_STATE', isRecording: true, isPaused: false });
     } else {
       engineA.current?.pauseRecording();
       engineB.current?.pauseRecording();
       setIsPaused(true);
+      webrtcEngine.current?.sendSignal({ type: 'RECORDING_STATE', isRecording: true, isPaused: true });
     }
   }, [isPaused]);
 
@@ -315,6 +334,8 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     setIsPaused(false);
     setBufferA(bA);
     setBufferB(bB);
+
+    webrtcEngine.current?.sendSignal({ type: 'RECORDING_STATE', isRecording: false });
 
     let compiled: AudioBuffer | null = null;
     if (bA && bB && engineA.current?.audioContext) {

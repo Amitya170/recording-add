@@ -22,6 +22,7 @@ export class WebRTCAudioEngine {
   public role: 'host' | 'guest';
   public onStatusChange?: (status: WebRTCStatus) => void;
   public onRemoteStream?: (stream: MediaStream) => void;
+  public onSignal?: (message: any) => void;
 
   public isConnected: boolean = false;
   private statusText: string = 'Idle';
@@ -31,6 +32,12 @@ export class WebRTCAudioEngine {
     this.channel = new BroadcastChannel(`webrtc_session_${sessionToken}`);
     this.initChannel();
     this.startPresenceHeartbeat();
+  }
+
+  public sendSignal(message: any) {
+    if (this.channel) {
+      this.channel.postMessage({ type: 'CUSTOM_SIGNAL', data: message });
+    }
   }
 
   private updateStatus(text: string, connected: boolean = false) {
@@ -64,7 +71,9 @@ export class WebRTCAudioEngine {
     this.channel.onmessage = async (event) => {
       const { type, data } = event.data || {};
 
-      if (type === 'HOST_ONLINE' && this.role === 'guest') {
+      if (type === 'CUSTOM_SIGNAL' && this.onSignal) {
+        this.onSignal(data);
+      } else if (type === 'HOST_ONLINE' && this.role === 'guest') {
         if (!this.isConnected) {
           this.channel?.postMessage({ type: 'JOIN_REQUEST', role: 'guest' });
         }
