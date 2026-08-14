@@ -322,7 +322,17 @@ export class SpeakerAudioEngine {
 
   public applyMuteState(): void {
     if (this.gainNode) {
-      this.gainNode.gain.value = this.isMuted ? 0 : this.userGain;
+      const targetGain = this.isMuted ? 0 : this.userGain;
+      if (this.ctx) {
+        try {
+          this.gainNode.gain.cancelScheduledValues(this.ctx.currentTime);
+          this.gainNode.gain.setValueAtTime(targetGain, this.ctx.currentTime);
+        } catch {
+          this.gainNode.gain.value = targetGain;
+        }
+      } else {
+        this.gainNode.gain.value = targetGain;
+      }
     }
     if (this.stream) {
       this.stream.getAudioTracks().forEach((track) => {

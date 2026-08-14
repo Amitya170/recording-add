@@ -182,8 +182,8 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       // PRIMARY playback path: audio element (most reliable, lowest latency)
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
-        remoteAudioRef.current.volume = 1.0;
-        remoteAudioRef.current.muted = false;
+        remoteAudioRef.current.muted = isMutedB;
+        remoteAudioRef.current.volume = isMutedB ? 0 : Math.min(1, Math.max(0, gainB));
         remoteAudioRef.current.play().catch((e) => console.warn('Autoplay error:', e));
       }
       // SECONDARY path: engine for waveform visualizer & PCM recording only (no speaker output)
@@ -540,12 +540,14 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       setIsMutedB(muted);
       if (remoteAudioRef.current) {
         remoteAudioRef.current.muted = muted;
+        remoteAudioRef.current.volume = muted ? 0 : Math.min(1, Math.max(0, gainB));
       }
     } else {
       setIsMutedB((prev) => {
         const next = !prev;
         if (remoteAudioRef.current) {
           remoteAudioRef.current.muted = next;
+          remoteAudioRef.current.volume = next ? 0 : Math.min(1, Math.max(0, gainB));
         }
         return next;
       });
@@ -560,6 +562,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
   const handleGainChangeB = (val: number) => {
     setGainB(val);
     engineB.current?.setGain(val);
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.volume = isMutedB ? 0 : Math.min(1, Math.max(0, val));
+    }
   };
 
   const handlePresetChangeA = (preset: string) => {
