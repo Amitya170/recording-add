@@ -48,6 +48,7 @@ import type { Marker } from '../Markers/MarkerList';
 import { MarkerList } from '../Markers/MarkerList';
 import { SoundboardPanel } from './SoundboardPanel';
 import { getAutoUploadToDrive, uploadAudioBlobToDrive, DEFAULT_FOLDER_URL } from '../../auth/GoogleDriveUploader';
+import { DriveUploadNotificationModal } from '../Modals/DriveUploadNotificationModal';
 
 interface PodcastStudioProps {
   guestNameParam?: string;
@@ -104,6 +105,16 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     isUploading: boolean;
     progress: number;
     stageText: string;
+    fileUrl?: string;
+    error?: string;
+    sessionTitle?: string;
+  } | null>(null);
+
+  // Popup Modal for Upload Success / Error Notifications
+  const [uploadModalPopup, setUploadModalPopup] = useState<{
+    type: 'success' | 'error';
+    title: string;
+    message: string;
     fileUrl?: string;
     error?: string;
     sessionTitle?: string;
@@ -404,11 +415,25 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
           fileUrl: res.fileUrl,
           sessionTitle: title,
         });
+        setUploadModalPopup({
+          type: 'success',
+          title: 'Audio Uploaded Successfully! 🎉',
+          message: `Your podcast master recording has been successfully uploaded to Google Drive.`,
+          fileUrl: res.fileUrl,
+          sessionTitle: title,
+        });
       } else {
         setDriveUpload({
           isUploading: false,
           progress: 0,
           stageText: 'Google Drive upload notice: ' + (res.error || 'Check Google Drive Webhook'),
+          error: res.error,
+          sessionTitle: title,
+        });
+        setUploadModalPopup({
+          type: 'error',
+          title: 'Google Drive Upload Error ⚠️',
+          message: 'Failed to upload recorded audio to Google Drive. Please verify your Google Apps Script Webhook deployment settings.',
           error: res.error,
           sessionTitle: title,
         });
@@ -419,6 +444,13 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         progress: 0,
         stageText: 'Upload failed: ' + (e?.message || 'Network error'),
         error: e?.message || 'Network error',
+        sessionTitle: title,
+      });
+      setUploadModalPopup({
+        type: 'error',
+        title: 'Google Drive Upload Failed ⚠️',
+        message: 'An unexpected network error occurred while uploading audio to Google Drive.',
+        error: e?.message || 'Network connection failed',
         sessionTitle: title,
       });
     }
@@ -518,12 +550,26 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
                 fileUrl: res.fileUrl,
                 sessionTitle: savedSession.title,
               });
+              setUploadModalPopup({
+                type: 'success',
+                title: 'Audio Uploaded Successfully! 🎉',
+                message: `Your podcast recording "${savedSession.title}" has been saved and automatically uploaded to Google Drive.`,
+                fileUrl: res.fileUrl,
+                sessionTitle: savedSession.title,
+              });
               window.dispatchEvent(new Event('storage'));
             } else {
               setDriveUpload({
                 isUploading: false,
                 progress: 0,
                 stageText: 'Google Drive auto-upload: ' + (res.error || 'Check Drive settings'),
+                error: res.error,
+                sessionTitle: savedSession.title,
+              });
+              setUploadModalPopup({
+                type: 'error',
+                title: 'Google Drive Auto-Upload Notice ⚠️',
+                message: 'Your recording was saved locally in the studio, but auto-upload to Google Drive encountered an issue. You can click "Upload to Google Drive" to retry.',
                 error: res.error,
                 sessionTitle: savedSession.title,
               });
@@ -534,6 +580,13 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
               progress: 0,
               stageText: 'Google Drive auto-upload failed',
               error: e?.message || 'Unknown network error',
+              sessionTitle: savedSession.title,
+            });
+            setUploadModalPopup({
+              type: 'error',
+              title: 'Google Drive Auto-Upload Failed ⚠️',
+              message: 'Recording saved locally. Network error prevented automatic Google Drive upload.',
+              error: e?.message || 'Network error',
               sessionTitle: savedSession.title,
             });
           });
@@ -1308,6 +1361,20 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
             </div>
           )}
         </div>
+      )}
+
+      {/* Google Drive Upload Success / Error Popup Modal */}
+      {uploadModalPopup && (
+        <DriveUploadNotificationModal
+          type={uploadModalPopup.type}
+          title={uploadModalPopup.title}
+          message={uploadModalPopup.message}
+          fileUrl={uploadModalPopup.fileUrl}
+          error={uploadModalPopup.error}
+          sessionTitle={uploadModalPopup.sessionTitle}
+          onClose={() => setUploadModalPopup(null)}
+          onRetry={uploadModalPopup.type === 'error' ? handleManualUploadToDrive : undefined}
+        />
       )}
     </div>
   );

@@ -42,6 +42,7 @@ import {
 import { AudioMetadataModal } from './AudioMetadataModal';
 import { ExportModal } from '../Export/ExportModal';
 import { encodeWav } from '../../audio/encoders/WavEncoder';
+import { DriveUploadNotificationModal } from '../Modals/DriveUploadNotificationModal';
 
 import { getSessionAudioBlobs } from '../../auth/CloudAudioStore';
 import {
@@ -83,6 +84,15 @@ export const AdminPanel: React.FC = () => {
   const [uploadingSessionId, setUploadingSessionId] = useState<string | null>(null);
   const [uploadProgressMap, setUploadProgressMap] = useState<Record<string, { progress: number; stageText: string }>>({});
   const [driveUploadMessage, setDriveUploadMessage] = useState<{ id: string; success: boolean; text: string; url?: string } | null>(null);
+  const [drivePopupModal, setDrivePopupModal] = useState<{
+    type: 'success' | 'error';
+    title: string;
+    message: string;
+    fileUrl?: string;
+    error?: string;
+    sessionTitle?: string;
+    retrySession?: RecordingSession;
+  } | null>(null);
 
   useEffect(() => {
     // Estimate storage from session data
@@ -302,11 +312,26 @@ export const AdminPanel: React.FC = () => {
           text: 'Uploaded to Google Drive (100%)',
           url: res.fileUrl,
         });
+        setDrivePopupModal({
+          type: 'success',
+          title: 'Audio Uploaded Successfully! 🎉',
+          message: `The recording session "${session.title}" was successfully uploaded to your Google Drive.`,
+          fileUrl: res.fileUrl,
+          sessionTitle: session.title,
+        });
       } else {
         setDriveUploadMessage({
           id: session.id,
           success: false,
           text: res.error || 'Failed uploading to Google Drive',
+        });
+        setDrivePopupModal({
+          type: 'error',
+          title: 'Google Drive Upload Error ⚠️',
+          message: res.error || 'Failed to upload session audio to Google Drive. Please ensure your Google Apps Script is deployed with access set to Anyone.',
+          error: res.error,
+          sessionTitle: session.title,
+          retrySession: session,
         });
       }
     } catch (err: any) {
@@ -314,6 +339,14 @@ export const AdminPanel: React.FC = () => {
         id: session.id,
         success: false,
         text: err?.message || 'Upload error',
+      });
+      setDrivePopupModal({
+        type: 'error',
+        title: 'Google Drive Upload Failed ⚠️',
+        message: 'Network error prevented upload to Google Drive.',
+        error: err?.message || 'Network error',
+        sessionTitle: session.title,
+        retrySession: session,
       });
     } finally {
       setUploadingSessionId(null);
@@ -1098,6 +1131,28 @@ export const AdminPanel: React.FC = () => {
         onEnded={() => setPreviewingSessionId(null)}
         style={{ display: 'none' }}
       />
+
+      {/* Google Drive Upload Success / Error Notification Modal Popup */}
+      {drivePopupModal && (
+        <DriveUploadNotificationModal
+          type={drivePopupModal.type}
+          title={drivePopupModal.title}
+          message={drivePopupModal.message}
+          fileUrl={drivePopupModal.fileUrl}
+          error={drivePopupModal.error}
+          sessionTitle={drivePopupModal.sessionTitle}
+          onClose={() => setDrivePopupModal(null)}
+          onRetry={
+            drivePopupModal.retrySession
+              ? () => {
+                  const s = drivePopupModal.retrySession!;
+                  setDrivePopupModal(null);
+                  handleUploadSessionToDrive(s);
+                }
+              : undefined
+          }
+        />
+      )}
     </div>
   );
 };
