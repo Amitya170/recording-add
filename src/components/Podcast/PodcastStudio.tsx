@@ -168,6 +168,35 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
   // Initialize Engines
   useEffect(() => {
+    // IMPORTANT: Create WebRTC engine FIRST (synchronously) so it is ready
+    // when handleDeviceChangeA fires from refreshDevices() below.
+    const rRole = currentUser?.role === 'user' ? 'guest' : 'host';
+    const rEngine = new WebRTCAudioEngine(rRole, sessionToken || 'podcast_main_session');
+    rEngine.onStatusChange = (st) => {
+      setWebrtcStatus(st);
+      if (st.connected) {
+        setIsConnectedB(true);
+      }
+    };
+    rEngine.onRemoteStream = async (remoteStream) => {
+      // PRIMARY playback path: audio element (most reliable, lowest latency)
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.srcObject = remoteStream;
+        remoteAudioRef.current.volume = 1.0;
+        remoteAudioRef.current.muted = false;
+        remoteAudioRef.current.play().catch((e) => console.warn('Autoplay error:', e));
+      }
+      // SECONDARY path: engine for waveform visualizer & PCM recording only (no speaker output)
+      if (engineB.current) {
+        await engineB.current.startMediaStream(remoteStream);
+        setIsConnectedB(true);
+        if (isRecordingRef.current) {
+          engineB.current.startRecording();
+        }
+      }
+    };
+    webrtcEngine.current = rEngine;
+
     // Host mic: no self monitor. Guest incoming: monitorOutput=false because we use
     // the audio element for playback (prevents double audio path causing noise/echo).
     const eA = new SpeakerAudioEngine('Speaker A (Host)', false);
@@ -197,40 +226,23 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       const ctx = await eA.init(undefined, 44100);
       await eB.init(ctx, 44100);
       await refreshDevices();
+
+      // If mic was auto-selected before engines were ready, retry stream attachment
+      const existingStream = eA.mediaStream;
+      if (existingStream && rEngine) {
+        try {
+          await rEngine.setLocalStream(existingStream);
+          console.log('[Host] Deferred local stream set on WebRTC engine after init');
+        } catch (e) {
+          console.warn('[Host] Deferred setLocalStream failed:', e);
+        }
+      }
     };
     setup();
 
     if (navigator.mediaDevices) {
       navigator.mediaDevices.addEventListener('devicechange', refreshDevices);
     }
-
-    // WebRTC Engine Init for Bi-Directional Call Audio
-    const rRole = currentUser?.role === 'user' ? 'guest' : 'host';
-    const rEngine = new WebRTCAudioEngine(rRole, sessionToken || 'podcast_main_session');
-    rEngine.onStatusChange = (st) => {
-      setWebrtcStatus(st);
-      if (st.connected) {
-        setIsConnectedB(true);
-      }
-    };
-    rEngine.onRemoteStream = async (remoteStream) => {
-      // PRIMARY playback path: audio element (most reliable, lowest latency)
-      if (remoteAudioRef.current) {
-        remoteAudioRef.current.srcObject = remoteStream;
-        remoteAudioRef.current.volume = 1.0;
-        remoteAudioRef.current.muted = false;
-        remoteAudioRef.current.play().catch((e) => console.warn('Autoplay error:', e));
-      }
-      // SECONDARY path: engine for waveform visualizer & PCM recording only (no speaker output)
-      if (engineB.current) {
-        await engineB.current.startMediaStream(remoteStream);
-        setIsConnectedB(true);
-        if (isRecordingRef.current) {
-          engineB.current.startRecording();
-        }
-      }
-    };
-    webrtcEngine.current = rEngine;
 
     // Init Speech Recognition & Check Crash Recovery
     sttEngine.current = new SpeechToTextEngine();

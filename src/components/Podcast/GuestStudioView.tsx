@@ -4,7 +4,9 @@ import {
   Activity,
   LogOut,
   HelpCircle,
-  MessageSquare
+  MessageSquare,
+  AlertTriangle,
+  Mic,
 } from 'lucide-react';
 import { useAuth } from '../../auth/AuthContext';
 import { WebRTCAudioEngine, type WebRTCStatus } from '../../audio/WebRTCAudioEngine';
@@ -34,6 +36,7 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
   const [gain, setGain] = useState(1.0);
   const [isSolo, setIsSolo] = useState(false);
   const [vocalPreset, setVocalPreset] = useState('warm');
+  const [micPermissionError, setMicPermissionError] = useState<string | null>(null);
 
   const [analysisGuest, setAnalysisGuest] = useState<AnalysisData | null>(null);
   const [showHelp, setShowHelp] = useState(false);
@@ -62,62 +65,43 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
 
   const handleDeviceChange = useCallback(async (id: string) => {
     setSelectedDevice(id);
+    setMicPermissionError(null);
     if (id && engineGuest.current) {
       try {
         await engineGuest.current.startInputStream(id);
         setIsConnected(true);
 
-        // Transmit Guest microphone stream over WebRTC to Host
+        // Transmit Guest mic stream to Host via WebRTC
         const stream = engineGuest.current.mediaStream;
-        if (stream && webrtcEngine.current) {
-          await webrtcEngine.current.setLocalStream(stream);
+        if (stream) {
+          // webrtcEngine.current may still be null on very first auto-select;
+          // we store the stream and the engine will pick it up on connect.
+          if (webrtcEngine.current) {
+            await webrtcEngine.current.setLocalStream(stream);
+            console.log('[Guest] Local mic stream set on WebRTC engine');
+          } else {
+            // Engine not ready yet (first render race). Will be set after engine init.
+            console.warn('[Guest] WebRTC engine not ready yet; stream will be set after init');
+          }
         }
-      } catch (err) {
-        console.warn('Guest device change failed:', err);
+      } catch (err: any) {
         setIsConnected(false);
+        if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
+          setMicPermissionError('Microphone access denied. Please allow microphone permissions in your browser and try again.');
+        } else if (err?.name === 'NotFoundError') {
+          setMicPermissionError('No microphone found. Please connect a microphone and refresh the page.');
+        } else {
+          setMicPermissionError(`Failed to access microphone: ${err?.message || 'Unknown error'}`);
+        }
+        console.warn('Guest device change failed:', err);
       }
     }
   }, []);
 
   // Initialize Guest Engine & WebRTC
   useEffect(() => {
-    // Guest own mic: no monitor. Host incoming: monitorOutput=false because we use
-    // the audio element for playback (prevents double audio path causing noise/echo).
-    const engine = new SpeakerAudioEngine('Guest Speaker', false);
-    const eHost = new SpeakerAudioEngine('Host Speaker (Incoming)', false);
-    engineGuest.current = engine;
-    engineHostIncoming.current = eHost;
-
-    const refreshDevices = async () => {
-      try {
-        const devs = await getAudioDevices();
-        setDevices(devs);
-        if (devs.length > 0) {
-          setSelectedDevice((curr) => {
-            if (!curr) {
-              handleDeviceChange(devs[0].deviceId);
-              return devs[0].deviceId;
-            }
-            return curr;
-          });
-        }
-      } catch (err) {
-        console.warn('Failed getting guest audio devices:', err);
-      }
-    };
-
-    const setup = async () => {
-      const ctx = await engine.init(undefined, 44100);
-      await eHost.init(ctx, 44100);
-      await refreshDevices();
-    };
-    setup();
-
-    if (navigator.mediaDevices) {
-      navigator.mediaDevices.addEventListener('devicechange', refreshDevices);
-    }
-
-    // WebRTC Engine Init (Guest Role)
+    // IMPORTANT: Create the WebRTC engine FIRST (synchronously) so it is
+    // ready when handleDeviceChange fires from refreshDevices() below.
     const rEngine = new WebRTCAudioEngine('guest', sessionToken || 'podcast_main_session');
     rEngine.onStatusChange = (st) => setWebrtcStatus(st);
     rEngine.onRemoteStream = async (remoteStream) => {
@@ -147,6 +131,54 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
       }
     };
     webrtcEngine.current = rEngine;
+
+    // Guest own mic: no monitor. Host incoming: monitorOutput=false because we use
+    // the audio element for playback (prevents double audio path causing noise/echo).
+    const engine = new SpeakerAudioEngine('Guest Speaker', false);
+    const eHost = new SpeakerAudioEngine('Host Speaker (Incoming)', false);
+    engineGuest.current = engine;
+    engineHostIncoming.current = eHost;
+
+    const refreshDevices = async () => {
+      try {
+        const devs = await getAudioDevices();
+        setDevices(devs);
+        if (devs.length > 0) {
+          setSelectedDevice((curr) => {
+            if (!curr) {
+              handleDeviceChange(devs[0].deviceId);
+              return devs[0].deviceId;
+            }
+            return curr;
+          });
+        }
+      } catch (err) {
+        console.warn('Failed getting guest audio devices:', err);
+      }
+    };
+
+    const setup = async () => {
+      const ctx = await engine.init(undefined, 44100);
+      await eHost.init(ctx, 44100);
+      // Now engines are ready: refresh devices (will trigger mic selection)
+      await refreshDevices();
+
+      // If mic was already selected before engines were ready, retry stream attachment
+      const existingStream = engine.mediaStream;
+      if (existingStream && rEngine) {
+        try {
+          await rEngine.setLocalStream(existingStream);
+          console.log('[Guest] Deferred local stream set on WebRTC engine after init');
+        } catch (e) {
+          console.warn('[Guest] Deferred setLocalStream failed:', e);
+        }
+      }
+    };
+    setup();
+
+    if (navigator.mediaDevices) {
+      navigator.mediaDevices.addEventListener('devicechange', refreshDevices);
+    }
 
     // Live Speech Recognition
     sttEngine.current = new SpeechToTextEngine();
@@ -284,6 +316,40 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
                 : 'WAITING FOR HOST TO START RECORDING SESSION...'}
             </span>
           </div>
+
+          {/* Mic Permission Error Banner */}
+          {micPermissionError && (
+            <div style={{
+              background: 'rgba(255,42,95,0.1)',
+              border: '1px solid rgba(255,42,95,0.5)',
+              borderRadius: '8px',
+              padding: '12px 16px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              fontSize: '0.82rem',
+              color: '#ff2a5f',
+              fontWeight: 600,
+            }}>
+              <AlertTriangle size={18} style={{ flexShrink: 0 }} />
+              <span style={{ flex: 1 }}>{micPermissionError}</span>
+              <button
+                onClick={() => {
+                  setMicPermissionError(null);
+                  navigator.mediaDevices.getUserMedia({ audio: true })
+                    .then((stream) => {
+                      stream.getTracks().forEach(t => t.stop());
+                      // Retry device selection after permission granted
+                      if (selectedDevice) handleDeviceChange(selectedDevice);
+                    })
+                    .catch(() => setMicPermissionError('Microphone access still denied. Check your browser settings.'));
+                }}
+                style={{ background: 'rgba(255,42,95,0.15)', border: '1px solid rgba(255,42,95,0.5)', borderRadius: '6px', color: '#ff2a5f', cursor: 'pointer', padding: '4px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}
+              >
+                <Mic size={12} /> Grant Access
+              </button>
+            </div>
+          )}
 
           {/* Full Width Guest Speaker Mic Control Panel */}
           <SpeakerPanel
