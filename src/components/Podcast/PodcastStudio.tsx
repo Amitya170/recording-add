@@ -20,7 +20,7 @@ import {
   Clock,
 } from 'lucide-react';
 import { useAuth } from '../../auth/AuthContext';
-import { saveRecordingSession, updateSessionDriveStatus } from '../../auth/SessionStore';
+import { saveRecordingSession, updateSessionDriveStatus, getActiveHostSessionToken, rotateHostSessionToken } from '../../auth/SessionStore';
 import { saveSessionAudioBlobs } from '../../auth/CloudAudioStore';
 import {
   getPendingRecoverySession,
@@ -124,14 +124,13 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
   const [isWebhookConfigured, setIsWebhookConfigured] = useState(Boolean(getGoogleDriveWebhookUrl()));
 
-  // Unique Studio WebRTC Session Room Token (generated per host session)
+  // Unique Studio WebRTC Session Room Token (persistent per host session unless rotated)
   const [studioSessionToken, setStudioSessionToken] = useState<string>(() => {
     if (sessionToken && sessionToken !== 'podcast_main_session') {
       return sessionToken;
     }
     const hostKey = currentUser?.id || currentUser?.name || 'host';
-    const safeKey = hostKey.toLowerCase().replace(/[^a-z0-9]/g, '_');
-    return `session_${safeKey}_${Date.now().toString(36)}`;
+    return getActiveHostSessionToken(hostKey);
   });
 
   // Sync studioSessionToken with URL search params so page refresh preserves active room

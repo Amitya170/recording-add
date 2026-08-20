@@ -540,4 +540,62 @@ export function clearAllSessions(): void {
   localStorage.setItem(SESSIONS_KEY, JSON.stringify([]));
 }
 
+// ──────────────────────────────────────────────────────────────
+// Multi-Tenant Session Token Lifecycle & Revocation Engine
+// ──────────────────────────────────────────────────────────────
+
+const ACTIVE_SESSION_PREFIX = 'podcast_active_session_';
+const REVOKED_SESSIONS_KEY = 'podcast_revoked_session_tokens';
+
+export function getRevokedSessionTokens(): string[] {
+  try {
+    const raw = localStorage.getItem(REVOKED_SESSIONS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function isSessionTokenRevoked(token: string): boolean {
+  if (!token) return false;
+  const clean = token.trim().toLowerCase();
+  const revoked = getRevokedSessionTokens();
+  return revoked.includes(clean);
+}
+
+export function revokeSessionToken(token: string): void {
+  if (!token) return;
+  const clean = token.trim().toLowerCase();
+  const revoked = getRevokedSessionTokens();
+  if (!revoked.includes(clean)) {
+    revoked.push(clean);
+    localStorage.setItem(REVOKED_SESSIONS_KEY, JSON.stringify(revoked));
+  }
+}
+
+export function getActiveHostSessionToken(hostId: string): string {
+  const safeHost = (hostId || 'host').toLowerCase().replace(/[^a-z0-9]/g, '_');
+  const key = ACTIVE_SESSION_PREFIX + safeHost;
+  const existing = localStorage.getItem(key);
+  if (existing && !isSessionTokenRevoked(existing)) {
+    return existing;
+  }
+  const newToken = `room_${safeHost}_${Date.now().toString(36)}`;
+  localStorage.setItem(key, newToken);
+  return newToken;
+}
+
+export function rotateHostSessionToken(hostId: string): string {
+  const safeHost = (hostId || 'host').toLowerCase().replace(/[^a-z0-9]/g, '_');
+  const key = ACTIVE_SESSION_PREFIX + safeHost;
+  const oldToken = localStorage.getItem(key);
+  if (oldToken) {
+    revokeSessionToken(oldToken);
+  }
+  const newToken = `room_${safeHost}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  localStorage.setItem(key, newToken);
+  return newToken;
+}
+
+
 

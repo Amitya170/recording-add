@@ -50,19 +50,27 @@ function getEnsuredAudioStream(stream: MediaStream | null): MediaStream {
   }
 }
 
-const ICE_SERVERS = [
+const ICE_SERVERS: RTCIceServer[] = [
+  // Google Global STUN Fleet
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:stun2.l.google.com:19302' },
   { urls: 'stun:stun3.l.google.com:19302' },
   { urls: 'stun:stun4.l.google.com:19302' },
+  // Cloudflare Global Anycast STUN
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  // Mozilla STUN
+  { urls: 'stun:stun.services.mozilla.com' },
+  // Metered STUN & TURN Relay Fleet (NAT / CGNAT / Firewall Traversal)
   { urls: 'stun:stun.relay.metered.ca:80' },
+  { urls: 'stun:stun.relay.metered.ca:443' },
   {
     urls: [
       'turn:openrelay.metered.ca:80',
       'turn:openrelay.metered.ca:443',
       'turn:openrelay.metered.ca:443?transport=tcp',
       'turns:openrelay.metered.ca:443?transport=tcp',
+      'turns:openrelay.metered.ca:5349',
     ],
     username: 'openrelayproject',
     credential: 'openrelayproject',
@@ -77,8 +85,10 @@ export class WebRTCAudioEngine {
   private remoteStream: MediaStream | null = null;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   private guestCallRetryInterval: ReturnType<typeof setInterval> | null = null;
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private sessionToken: string;
   private isDisposed = false;
+  private isConnecting = false;
 
   public role: 'host' | 'guest';
   public isConnected: boolean = false;
@@ -113,6 +123,10 @@ export class WebRTCAudioEngine {
         config: {
           iceServers: ICE_SERVERS,
           sdpSemantics: 'unified-plan',
+          iceCandidatePoolSize: 10,
+          iceTransportPolicy: 'all',
+          bundlePolicy: 'max-bundle',
+          rtcpMuxPolicy: 'require',
         },
       });
     } catch (e) {
@@ -130,6 +144,7 @@ export class WebRTCAudioEngine {
         this.updateStatus('Connecting to Host…');
         this.startGuestCallLoop();
       }
+      this.startHeartbeat();
     });
 
     this.peer.on('error', (err) => {
@@ -137,32 +152,50 @@ export class WebRTCAudioEngine {
       switch (err.type) {
         case 'unavailable-id':
           if (this.role === 'host') {
-            this.updateStatus('Session ID in use — reconnecting…');
-            this.scheduleReconnect(3000);
+            this.updateStatus('Session in use — recovering…');
+            this.scheduleReconnect(2500);
           }
           break;
         case 'peer-unavailable':
           this.updateStatus('Host not online yet — retrying…');
+          this.isConnecting = false;
           break;
         case 'network':
         case 'disconnected':
         case 'server-error':
-          this.updateStatus('Network issue — reconnecting…');
+          this.updateStatus('Network reconnection in progress…');
+          this.isConnecting = false;
           this.scheduleReconnect(4000);
           break;
         default:
           this.updateStatus(`Connecting (${err.type})…`);
+          this.isConnecting = false;
           this.scheduleReconnect(5000);
       }
     });
 
     this.peer.on('disconnected', () => {
       if (!this.isConnected && !this.isDisposed) {
-        this.updateStatus('Reconnecting to server…');
+        this.updateStatus('Reconnecting to signaling server…');
         try { this.peer?.reconnect(); } catch {}
         this.scheduleReconnect(4000);
       }
     });
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // Heartbeat & Keepalive to keep NAT pinholes open across WAN
+  // ──────────────────────────────────────────────────────────────
+
+  private startHeartbeat() {
+    if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
+    this.heartbeatInterval = setInterval(() => {
+      if (this.dataConn && this.dataConn.open) {
+        try {
+          this.dataConn.send({ type: '__ping__', timestamp: Date.now() });
+        } catch {}
+      }
+    }, 4000);
   }
 
   // ──────────────────────────────────────────────────────────────
@@ -183,7 +216,8 @@ export class WebRTCAudioEngine {
         this.updateStatus('Guest Connected ✓ — P2P Live', true);
       });
 
-      conn.on('data', (data) => {
+      conn.on('data', (data: any) => {
+        if (data?.type === '__ping__') return; // ignore internal keepalive
         this.onSignal?.(data);
       });
 
@@ -212,7 +246,7 @@ export class WebRTCAudioEngine {
         this.onRemoteStream?.(remoteStream);
       });
 
-      // Attach to RTCPeerConnection ontrack for real-time track replacement detection
+      // Attach to RTCPeerConnection ontrack & oniceconnectionstatechange
       const pc = (call as any).peerConnection as RTCPeerConnection;
       if (pc) {
         pc.ontrack = (event) => {
@@ -221,6 +255,15 @@ export class WebRTCAudioEngine {
           this.remoteStream = stream;
           this.updateStatus('Guest Connected ✓ — Audio Live', true);
           this.onRemoteStream?.(stream);
+        };
+
+        pc.oniceconnectionstatechange = () => {
+          console.log('[WebRTC] Host ICE state:', pc.iceConnectionState);
+          if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+            this.updateStatus('Guest Connected ✓ — Audio Live', true);
+          } else if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+            this.handleDisconnect('Connection interrupted — waiting for guest…');
+          }
         };
       }
 
@@ -241,14 +284,15 @@ export class WebRTCAudioEngine {
     this.stopGuestCallLoop();
     this.attemptGuestCall();
 
+    // Resilient WAN loop: retry only if truly disconnected and not actively negotiating ICE
     this.guestCallRetryInterval = setInterval(() => {
-      if (!this.isConnected && !this.isDisposed) {
+      if (!this.isConnected && !this.isDisposed && !this.isConnecting) {
         console.log('[WebRTC] Guest: retrying P2P call to Host…');
         this.attemptGuestCall();
-      } else {
+      } else if (this.isConnected) {
         this.stopGuestCallLoop();
       }
-    }, 3500);
+    }, 6000);
   }
 
   private stopGuestCallLoop() {
@@ -261,6 +305,7 @@ export class WebRTCAudioEngine {
   private attemptGuestCall() {
     if (!this.peer || this.peer.destroyed || this.isDisposed) return;
 
+    this.isConnecting = true;
     const hostId = `pcs_host_${this.sessionToken}`;
     console.log('[WebRTC] Guest: connecting to host ID:', hostId);
 
@@ -271,21 +316,25 @@ export class WebRTCAudioEngine {
 
     conn.on('open', () => {
       console.log('[WebRTC] Guest: data channel OPEN with host');
+      this.isConnecting = false;
       this.stopGuestCallLoop();
       this.updateStatus('Connected to Host ✓ (P2P Call Active)', true);
     });
 
-    conn.on('data', (data) => {
+    conn.on('data', (data: any) => {
+      if (data?.type === '__ping__') return; // ignore internal keepalive
       this.onSignal?.(data);
     });
 
     conn.on('close', () => {
+      this.isConnecting = false;
       this.handleDisconnect('Host disconnected — retrying…');
       this.startGuestCallLoop();
     });
 
     conn.on('error', (e) => {
       console.warn('[WebRTC] Guest data conn error:', e);
+      this.isConnecting = false;
     });
 
     // 2. Audio Media Call
@@ -299,6 +348,7 @@ export class WebRTCAudioEngine {
       call.on('stream', (remoteStream) => {
         console.log('[WebRTC] Guest: received host audio stream', remoteStream.id, 'tracks:', remoteStream.getAudioTracks().length);
         this.remoteStream = remoteStream;
+        this.isConnecting = false;
         this.stopGuestCallLoop();
         this.updateStatus('Connected to Host ✓ (Host Audio Live)', true);
         this.onRemoteStream?.(remoteStream);
@@ -310,18 +360,33 @@ export class WebRTCAudioEngine {
           console.log('[WebRTC] Guest: ontrack event:', event.track.id);
           const stream = event.streams[0] || new MediaStream([event.track]);
           this.remoteStream = stream;
+          this.isConnecting = false;
           this.stopGuestCallLoop();
           this.updateStatus('Connected to Host ✓ (Host Audio Live)', true);
           this.onRemoteStream?.(stream);
         };
+
+        pc.oniceconnectionstatechange = () => {
+          console.log('[WebRTC] Guest ICE state:', pc.iceConnectionState);
+          if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+            this.isConnecting = false;
+            this.stopGuestCallLoop();
+            this.updateStatus('Connected to Host ✓ (Host Audio Live)', true);
+          } else if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+            this.isConnecting = false;
+            this.handleDisconnect('Host disconnected — retrying…');
+          }
+        };
       }
 
       call.on('close', () => {
+        this.isConnecting = false;
         this.handleDisconnect('Host audio stream closed');
       });
 
       call.on('error', (e) => {
         console.warn('[WebRTC] Guest call error:', e);
+        this.isConnecting = false;
       });
     }
   }
@@ -414,6 +479,7 @@ export class WebRTCAudioEngine {
   public dispose() {
     this.isDisposed = true;
     this.stopGuestCallLoop();
+    if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
     try { this.mediaConn?.close(); } catch {}
     try { this.dataConn?.close(); } catch {}

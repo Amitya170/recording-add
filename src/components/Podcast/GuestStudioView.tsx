@@ -9,6 +9,7 @@ import {
   Mic,
 } from 'lucide-react';
 import { useAuth } from '../../auth/AuthContext';
+import { isSessionTokenRevoked } from '../../auth/SessionStore';
 import { WebRTCAudioEngine, type WebRTCStatus } from '../../audio/WebRTCAudioEngine';
 import { SpeakerAudioEngine, getAudioDevices, type DeviceInfo } from '../../audio/AudioEngine';
 import type { AnalysisData } from '../../audio/AnalyserEngine';
@@ -27,6 +28,9 @@ interface GuestStudioViewProps {
 
 export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam, hostNameParam: _hostNameParam, sessionToken }) => {
   const { currentUser, logout } = useAuth();
+  const [pastedLink, setPastedLink] = useState('');
+
+  const isRevoked = sessionToken ? isSessionTokenRevoked(sessionToken) : false;
 
   const engineGuest = useRef<SpeakerAudioEngine | null>(null);
   const engineHostIncoming = useRef<SpeakerAudioEngine | null>(null);
@@ -257,6 +261,55 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     setCurrentLanguage(lang);
     sttEngine.current?.setLanguage(lang);
   };
+
+  if (isRevoked) {
+    return (
+      <div className="daw-root-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', padding: '20px', background: 'var(--bg-dark)' }}>
+        <div className="modal-card" style={{ maxWidth: '480px', width: '100%', textAlign: 'center', padding: '32px', border: '1px solid rgba(255, 59, 48, 0.3)', background: 'var(--bg-card)' }}>
+          <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: 'rgba(255, 59, 48, 0.15)', border: '1px solid rgba(255, 59, 48, 0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+            <AlertTriangle size={32} color="var(--accent-red)" />
+          </div>
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 800, marginBottom: '8px', color: 'var(--accent-red)' }}>
+            RECORDING SESSION LINK EXPIRED
+          </h2>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '20px', lineHeight: '1.5' }}>
+            The host has invalidated this recording session link and generated a new link. You cannot join or record with this expired link.
+          </p>
+          <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border-dim)', borderRadius: '8px', padding: '16px', marginBottom: '20px', textAlign: 'left' }}>
+            <label style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: '8px' }}>
+              HAVE A NEW INVITE LINK? PASTE IT TO JOIN:
+            </label>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <input
+                className="daw-input"
+                value={pastedLink}
+                onChange={(e) => setPastedLink(e.target.value)}
+                placeholder="Paste new invite link here..."
+                style={{ flex: 1, fontSize: '0.8rem' }}
+              />
+              <button
+                className="btn-transport btn-cyan"
+                onClick={() => {
+                  if (pastedLink.trim()) {
+                    window.location.href = pastedLink.trim();
+                  }
+                }}
+              >
+                Join
+              </button>
+            </div>
+          </div>
+          <button
+            className="btn-transport"
+            onClick={() => { window.location.href = window.location.origin; }}
+            style={{ width: '100%' }}
+          >
+            Return to Homepage
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="daw-container">
