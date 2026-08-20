@@ -15,6 +15,7 @@ import {
   FileAudio,
   Play,
   Pause,
+  Download,
   FileCode,
   CheckCircle,
   AlertCircle,
@@ -34,6 +35,7 @@ import {
 import { getSessionAudioBlobs, deleteSessionAudioBlobs, clearAllAudioBlobs } from '../../auth/CloudAudioStore';
 import { ThemeToggle } from '../Common/ThemeToggle';
 import { AudioMetadataModal } from '../Admin/AudioMetadataModal';
+import { ExportModal } from '../Export/ExportModal';
 import { encodeWav } from '../../audio/encoders/WavEncoder';
 
 export const SuperAdminPanel: React.FC = () => {
@@ -90,6 +92,53 @@ export const SuperAdminPanel: React.FC = () => {
 
   // Metadata Modal
   const [selectedSessionForMetadata, setSelectedSessionForMetadata] = useState<RecordingSession | null>(null);
+  const [exportModalSession, setExportModalSession] = useState<{
+    session: RecordingSession;
+    audioBuffer: AudioBuffer;
+    speakerABuffer: AudioBuffer;
+    speakerBBuffer: AudioBuffer;
+  } | null>(null);
+
+  const handleSuperAdminExportSession = async (session: RecordingSession) => {
+    const stored = await getSessionAudioBlobs(session.id);
+    if (stored && stored.stereoBlob) {
+      try {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        const ctx = new AudioCtx();
+        const arrayBuf = await stored.stereoBlob.arrayBuffer();
+        const mainBuf = await ctx.decodeAudioData(arrayBuf);
+
+        let bufA = mainBuf;
+        let bufB = mainBuf;
+
+        if (stored.speakerABlob) {
+          const arrA = await stored.speakerABlob.arrayBuffer();
+          bufA = await ctx.decodeAudioData(arrA);
+        }
+        if (stored.speakerBBlob) {
+          const arrB = await stored.speakerBBlob.arrayBuffer();
+          bufB = await ctx.decodeAudioData(arrB);
+        }
+
+        setExportModalSession({
+          session,
+          audioBuffer: mainBuf,
+          speakerABuffer: bufA,
+          speakerBBuffer: bufB,
+        });
+      } catch (err) {
+        console.error('Error decoding audio blobs for export modal:', err);
+      }
+    } else {
+      const bufs = createAudioBuffersForSession(session);
+      setExportModalSession({
+        session,
+        audioBuffer: bufs.audioBuffer,
+        speakerABuffer: bufs.speakerABuffer,
+        speakerBBuffer: bufs.speakerBBuffer,
+      });
+    }
+  };
 
   const refreshData = useCallback(() => {
     const all = getAllUsers();
@@ -984,6 +1033,13 @@ export const SuperAdminPanel: React.FC = () => {
                           <td>
                             <div style={{ display: 'flex', gap: '6px' }}>
                               <button
+                                className="creator-quick-btn active-cyan"
+                                onClick={() => handleSuperAdminExportSession(s)}
+                                title="Export Master Audio Stems (WAV/MP3/FLAC)"
+                              >
+                                <Download size={12} />
+                              </button>
+                              <button
                                 className="creator-quick-btn"
                                 onClick={() => setSelectedSessionForMetadata(s)}
                                 title="Metadata"
@@ -1147,6 +1203,16 @@ export const SuperAdminPanel: React.FC = () => {
         <AudioMetadataModal
           session={selectedSessionForMetadata}
           onClose={() => setSelectedSessionForMetadata(null)}
+        />
+      )}
+
+      {/* Master Stem Export Modal */}
+      {exportModalSession && (
+        <ExportModal
+          audioBuffer={exportModalSession.audioBuffer}
+          speakerABuffer={exportModalSession.speakerABuffer}
+          speakerBBuffer={exportModalSession.speakerBBuffer}
+          onClose={() => setExportModalSession(null)}
         />
       )}
     </div>
