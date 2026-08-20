@@ -127,7 +127,12 @@ export class WebRTCAudioEngine {
 
     try {
       this.peer = new Peer(peerId as string, {
-        debug: 0,
+        debug: 1,
+        host: '0.peerjs.com',
+        port: 443,
+        path: '/',
+        secure: true,
+        pingInterval: 5000, // Sends WebSocket ping every 5s to keep signaling connection active indefinitely
         config: {
           iceServers: ICE_SERVERS,
           sdpSemantics: 'unified-plan',
@@ -144,12 +149,12 @@ export class WebRTCAudioEngine {
     }
 
     this.peer.on('open', (id) => {
-      console.log(`[WebRTC] ${this.role} online — peer ID: ${id}`);
+      console.log(`[WebRTC] ${this.role} online on signaling broker — peer ID: ${id}`);
       if (this.role === 'host') {
-        this.updateStatus('Waiting for Guest to Join…');
+        this.updateStatus('Studio Room Ready ✓ — Waiting for Guest to Join…');
         this.listenAsHost();
       } else {
-        this.updateStatus('Connecting to Host…');
+        this.updateStatus('Connecting to Host Studio Room…');
         this.startGuestCallLoop();
       }
       this.startHeartbeat();
@@ -165,15 +170,23 @@ export class WebRTCAudioEngine {
           }
           break;
         case 'peer-unavailable':
-          this.updateStatus('Host not online yet — retrying…');
+          this.updateStatus('Waiting for Host to be online in studio… (Retrying)', false);
           this.isConnecting = false;
+          if (this.role === 'guest') {
+            setTimeout(() => {
+              if (!this.isConnected && !this.isDisposed) {
+                this.attemptGuestCall();
+              }
+            }, 3000);
+          }
           break;
         case 'network':
         case 'disconnected':
         case 'server-error':
-          this.updateStatus('Network reconnection in progress…');
+          this.updateStatus('Signaling reconnecting…');
           this.isConnecting = false;
-          this.scheduleReconnect(4000);
+          try { this.peer?.reconnect(); } catch {}
+          this.scheduleReconnect(3000);
           break;
         default:
           this.updateStatus(`Connecting (${err.type})…`);
@@ -184,9 +197,10 @@ export class WebRTCAudioEngine {
 
     this.peer.on('disconnected', () => {
       if (!this.isConnected && !this.isDisposed) {
-        this.updateStatus('Reconnecting to signaling server…');
+        console.log(`[WebRTC] ${this.role} signaling disconnected — auto-reconnecting…`);
+        this.updateStatus('Reconnecting to room signaling server…');
         try { this.peer?.reconnect(); } catch {}
-        this.scheduleReconnect(4000);
+        this.scheduleReconnect(3000);
       }
     });
   }
@@ -198,12 +212,20 @@ export class WebRTCAudioEngine {
   private startHeartbeat() {
     if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
     this.heartbeatInterval = setInterval(() => {
+      // 1. DataConnection Keepalive Ping
       if (this.dataConn && this.dataConn.open) {
         try {
           this.dataConn.send({ type: '__ping__', timestamp: Date.now() });
         } catch {}
       }
-    }, 4000);
+      // 2. Signaling socket keepalive — keep Host visible on PeerJS cloud
+      if (this.peer && !this.isDisposed) {
+        if (this.peer.disconnected && !this.peer.destroyed) {
+          console.log(`[WebRTC] ${this.role} signaling socket disconnected — reconnecting…`);
+          try { this.peer.reconnect(); } catch {}
+        }
+      }
+    }, 3000);
   }
 
   // ──────────────────────────────────────────────────────────────
