@@ -51,17 +51,19 @@ function getEnsuredAudioStream(stream: MediaStream | null): MediaStream {
 }
 
 const ICE_SERVERS: RTCIceServer[] = [
-  // Google Global STUN Fleet
+  // 1. Google Anycast Global STUN Fleet
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:stun2.l.google.com:19302' },
   { urls: 'stun:stun3.l.google.com:19302' },
   { urls: 'stun:stun4.l.google.com:19302' },
-  // Cloudflare Global Anycast STUN
+  // 2. Cloudflare Global STUN Fleet
   { urls: 'stun:stun.cloudflare.com:3478' },
-  // Mozilla STUN
+  // 3. Twilio Global Anycast STUN
+  { urls: 'stun:global.stun.twilio.com:3478' },
+  // 4. Mozilla STUN
   { urls: 'stun:stun.services.mozilla.com' },
-  // Metered STUN & TURN Relay Fleet (NAT / CGNAT / Firewall Traversal)
+  // 5. Metered STUN & TURN Relay Fleet (UDP + TCP + TLS Port 443/5349 for Symmetric NAT / CGNAT / Firewall Traversal)
   { urls: 'stun:stun.relay.metered.ca:80' },
   { urls: 'stun:stun.relay.metered.ca:443' },
   {
@@ -74,6 +76,12 @@ const ICE_SERVERS: RTCIceServer[] = [
     ],
     username: 'openrelayproject',
     credential: 'openrelayproject',
+  },
+  // 6. Backup Global TURN Relays
+  {
+    urls: 'turn:turn.matrix.org:3478',
+    username: 'matrix',
+    credential: 'secret',
   },
 ];
 
@@ -257,12 +265,23 @@ export class WebRTCAudioEngine {
           this.onRemoteStream?.(stream);
         };
 
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            console.log('[WebRTC] Host candidate:', event.candidate.type, event.candidate.protocol);
+          }
+        };
+
         pc.oniceconnectionstatechange = () => {
           console.log('[WebRTC] Host ICE state:', pc.iceConnectionState);
           if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
             this.updateStatus('Guest Connected ✓ — Audio Live', true);
-          } else if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
-            this.handleDisconnect('Connection interrupted — waiting for guest…');
+          } else if (pc.iceConnectionState === 'failed') {
+            console.warn('[WebRTC] Host ICE failed across networks — triggering ICE restart');
+            if (typeof (pc as any).restartIce === 'function') {
+              try { (pc as any).restartIce(); } catch {}
+            } else {
+              this.handleDisconnect('Connection interrupted — waiting for guest…');
+            }
           }
         };
       }
@@ -366,15 +385,26 @@ export class WebRTCAudioEngine {
           this.onRemoteStream?.(stream);
         };
 
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            console.log('[WebRTC] Guest candidate:', event.candidate.type, event.candidate.protocol);
+          }
+        };
+
         pc.oniceconnectionstatechange = () => {
           console.log('[WebRTC] Guest ICE state:', pc.iceConnectionState);
           if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
             this.isConnecting = false;
             this.stopGuestCallLoop();
             this.updateStatus('Connected to Host ✓ (Host Audio Live)', true);
-          } else if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
-            this.isConnecting = false;
-            this.handleDisconnect('Host disconnected — retrying…');
+          } else if (pc.iceConnectionState === 'failed') {
+            console.warn('[WebRTC] Guest ICE failed across networks — triggering ICE restart');
+            if (typeof (pc as any).restartIce === 'function') {
+              try { (pc as any).restartIce(); } catch {}
+            } else {
+              this.isConnecting = false;
+              this.handleDisconnect('Host disconnected — retrying…');
+            }
           }
         };
       }
