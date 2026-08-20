@@ -33,6 +33,7 @@ import { SpeakerAudioEngine, getAudioDevices, mergeToStereo, type DeviceInfo } f
 import type { AnalysisData } from '../../audio/AnalyserEngine';
 import { SpeechToTextEngine, type TranscriptItem } from '../../audio/SpeechToTextEngine';
 import { encodeWav } from '../../audio/encoders/WavEncoder';
+import { analyzeAudioBuffer } from '../../audio/AcousticAnalyzer';
 import { SpeakerPanel } from './SpeakerPanel';
 import { WaveformEditor } from '../Editor/WaveformEditor';
 import { ExportModal } from '../Export/ExportModal';
@@ -562,6 +563,11 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       setAudioBuffer(compiled);
 
       const calculatedDuration = Math.max(1, finalDurationSeconds || Math.round(compiled.duration));
+      
+      // Perform deep acoustic & broadcast analysis (LUFS, Crest Factor, Phase, Talk-Time)
+      const acoustic = analyzeAudioBuffer(compiled, bA, bB);
+
+      const sessionTitle = `Podcast Session ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
 
       // Automatically log recording session to SessionStore for Admin Reports
       const savedSession = saveRecordingSession({
@@ -571,20 +577,41 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         adminId: currentUser?.adminId || 'usr_admin1',
         organizationName: currentUser?.organizationName,
         guestName: guestDisplayNameRef.current || 'Guest Speaker',
-        title: `Podcast Session ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+        title: sessionTitle,
         durationSeconds: calculatedDuration,
         channelCount: compiled.numberOfChannels,
         format: 'WAV 32-bit Float',
+        sampleRate: compiled.sampleRate,
+        bitDepth: 32,
+        peakLeftDb: acoustic.truePeakLeftDb,
+        peakRightDb: acoustic.truePeakRightDb,
+        integratedLufs: acoustic.integratedLufs,
+        dynamicRangeScore: acoustic.dynamicRangeScore,
+        phaseCorrelation: acoustic.phaseCorrelation,
+        hostTalkPercent: acoustic.hostTalkPercent,
+        guestTalkPercent: acoustic.guestTalkPercent,
+        silencePercent: acoustic.silencePercent,
+        cueMarkers: markers.map((m) => ({ id: m.id, time: m.time, label: m.label })),
       });
 
       // Dispatch storage update so any open Admin tabs update in real-time
       window.dispatchEvent(new Event('storage'));
 
-      // Save raw binary WAV blobs to CloudAudioStore (IndexedDB) for Admin Audio Stem Export
+      // Save raw binary WAV blobs with embedded BWF & RIFF metadata
       try {
-        const stereoBlob = encodeWav(compiled, 32);
-        const blobA = bA ? encodeWav(bA, 32) : undefined;
-        const blobB = bB ? encodeWav(bB, 32) : undefined;
+        const bwfMeta = {
+          title: savedSession.title,
+          artist: savedSession.hostName,
+          organization: savedSession.organizationName || 'Podcast Craft Studio',
+          description: `Host: ${savedSession.hostName} | Guest: ${savedSession.guestName}`,
+          loudnessLufs: acoustic.integratedLufs,
+          truePeakDb: Math.max(acoustic.truePeakLeftDb, acoustic.truePeakRightDb),
+          cueMarkers: markers.map((m) => ({ time: m.time, label: m.label })),
+        };
+
+        const stereoBlob = encodeWav(compiled, 32, bwfMeta);
+        const blobA = bA ? encodeWav(bA, 32, { ...bwfMeta, title: `${savedSession.title} - Host Stem` }) : undefined;
+        const blobB = bB ? encodeWav(bB, 32, { ...bwfMeta, title: `${savedSession.title} - Guest Stem` }) : undefined;
         saveSessionAudioBlobs(savedSession.id, stereoBlob, blobA, blobB);
 
         // Auto-upload recorded audio directly to Google Drive folder if enabled
@@ -664,7 +691,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         console.error('Failed saving session audio blob:', err);
       }
     }
-  }, [currentUser?.id, currentUser?.email, currentUser?.name, currentUser?.adminId, currentUser?.organizationName]);
+  }, [currentUser?.id, currentUser?.email, currentUser?.name, currentUser?.adminId, currentUser?.organizationName, markers]);
 
   const handleAddMarker = useCallback((time: number) => {
     setMarkers((prev) => [

@@ -330,11 +330,10 @@ export class SpeakerAudioEngine {
         this.gainNode.gain.value = targetGain;
       }
     }
-    if (this.stream) {
-      this.stream.getAudioTracks().forEach((track) => {
-        track.enabled = !this.isMuted;
-      });
-    }
+    // NOTE: We intentionally do NOT set track.enabled on the MediaStream here.
+    // The GainNode handles muting for local recording/metering. Setting
+    // track.enabled = false would kill the audio for ALL consumers of the track,
+    // including WebRTC RTCPeerConnection, causing silence for the remote peer.
   }
 
   public getMuted(): boolean {

@@ -350,6 +350,7 @@ export class WebRTCAudioEngine {
           try {
             await audioSender.replaceTrack(audioTrack);
             console.log(`[WebRTC] ${this.role} replaced active audio track successfully`);
+            return; // Track replaced on live connection — no need to re-call
           } catch (e) {
             console.warn('[WebRTC] replaceTrack failed:', e);
           }
@@ -357,10 +358,9 @@ export class WebRTCAudioEngine {
       }
     }
 
-    // On Guest, if we now have the real live microphone stream, place a fresh call to Host
-    // to guarantee Host audio element receives the real hardware mic stream
+    // Only re-call if there was no existing media connection to replaceTrack on
     if (this.role === 'guest' && this.peer && !this.peer.destroyed && !this.isDisposed) {
-      console.log('[WebRTC] Guest: re-calling host with real microphone stream…');
+      console.log('[WebRTC] Guest: calling host with real microphone stream…');
       this.attemptGuestCall();
     }
   }

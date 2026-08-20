@@ -2,11 +2,13 @@ import React, { useState } from 'react';
 import { Download, X, FileAudio, Users, CloudUpload, CheckCircle, AlertCircle, ExternalLink, Loader2 } from 'lucide-react';
 import { encodeWav, type BitDepth } from '../../audio/encoders/WavEncoder';
 import { uploadAudioBlobToDrive, getGoogleDriveWebhookUrl } from '../../auth/GoogleDriveUploader';
+import type { RecordingSession } from '../../auth/SessionStore';
 
 interface ExportModalProps {
   audioBuffer: AudioBuffer | null;
   speakerABuffer?: AudioBuffer | null;
   speakerBBuffer?: AudioBuffer | null;
+  session?: RecordingSession;
   onClose: () => void;
 }
 
@@ -14,12 +16,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   audioBuffer,
   speakerABuffer,
   speakerBBuffer,
+  session,
   onClose,
 }) => {
   const [format, setFormat] = useState<'wav16' | 'wav24' | 'wav32'>('wav16');
   const [exportMode, setExportMode] = useState<'stereo' | 'separate'>('stereo');
-  const [title, setTitle] = useState<string>('Podcast Recording');
-  const [artist, setArtist] = useState<string>('Podcast Craft Studio');
+  const [title, setTitle] = useState<string>(session?.title || 'Podcast Recording');
+  const [artist, setArtist] = useState<string>(session?.hostName || 'Podcast Craft Studio');
 
   // Google Drive Upload State
   const [isUploadingDrive, setIsUploadingDrive] = useState(false);
@@ -53,20 +56,30 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     }, 100);
   };
 
+  const getBwfMeta = (trackTitle: string) => ({
+    title: trackTitle,
+    artist,
+    organization: session?.organizationName || 'Podcast Craft Studio',
+    description: session ? `Host: ${session.hostName} | Guest: ${session.guestName}` : 'Recorded with Podcast Craft Studio',
+    loudnessLufs: session?.integratedLufs ?? -16.0,
+    truePeakDb: session ? Math.max(session.peakLeftDb ?? -1.5, session.peakRightDb ?? -1.5) : -1.0,
+    cueMarkers: session?.cueMarkers?.map((m) => ({ time: m.time, label: m.label })) || [],
+  });
+
   const handleDownload = () => {
     const sanitized = title.replace(/\s+/g, '_');
 
     if (exportMode === 'stereo') {
-      const blob = encodeWav(audioBuffer, depth);
+      const blob = encodeWav(audioBuffer, depth, getBwfMeta(title));
       downloadBlob(blob, `${sanitized}_stereo_${format}.wav`);
     } else {
       // Export separate mono tracks
       if (speakerABuffer) {
-        const blobA = encodeWav(speakerABuffer, depth);
+        const blobA = encodeWav(speakerABuffer, depth, getBwfMeta(`${title} - Host Stem`));
         downloadBlob(blobA, `${sanitized}_SpeakerA_${format}.wav`);
       }
       if (speakerBBuffer) {
-        const blobB = encodeWav(speakerBBuffer, depth);
+        const blobB = encodeWav(speakerBBuffer, depth, getBwfMeta(`${title} - Guest Stem`));
         downloadBlob(blobB, `${sanitized}_SpeakerB_${format}.wav`);
       }
     }

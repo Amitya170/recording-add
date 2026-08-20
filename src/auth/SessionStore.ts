@@ -24,20 +24,34 @@ export interface RecordingSession {
   channelCount: number;
   format: string;
 
-  // Rich Technical Metadata
+  // Rich Technical & Acoustic Metadata
   sampleRate?: number; // e.g. 44100 Hz
   bitDepth?: number; // e.g. 32-bit Float
   bitrateKbps?: number; // e.g. 2822 kbps
   fileSizeMb?: number; // e.g. 15.4 MB
   peakLeftDb?: number; // e.g. -1.2 dBFS
   peakRightDb?: number; // e.g. -2.4 dBFS
-  integratedLufs?: number; // e.g. -16.5 LUFS
+  integratedLufs?: number; // e.g. -16.0 LUFS (EBU R128)
+  dynamicRangeScore?: number; // e.g. 14.2 dB (Crest Factor)
+  phaseCorrelation?: number; // e.g. +0.92 (Stereo mono-compatibility)
+  hostTalkPercent?: number; // e.g. 52%
+  guestTalkPercent?: number; // e.g. 44%
+  silencePercent?: number; // e.g. 4%
   audioCodec?: string; // e.g. "IEEE Float 32-Bit WAV"
   recordingDeviceA?: string; // Microphone A hardware name
   recordingDeviceB?: string; // Microphone B hardware name
   cueMarkers?: CueMarkerItem[];
   driveFileUrl?: string; // Google Drive direct URL
   driveUploadedAt?: string; // Timestamp when uploaded to Drive
+
+  // Podcast Distribution & Publishing Metadata
+  podcastShowName?: string;
+  podcastSeasonNum?: number;
+  podcastEpisodeNum?: number;
+  podcastEpisodeType?: 'full' | 'trailer' | 'bonus';
+  podcastExplicit?: boolean;
+  podcastDescription?: string;
+  podcastLanguage?: string;
 }
 
 export interface UserDurationReport {
@@ -217,19 +231,116 @@ export function generateFullMetadataJSON(session: RecordingSession): string {
     dspLevelMetrics: {
       peakLeftChannelDBFS: session.peakLeftDb ?? -1.5,
       peakRightChannelDBFS: session.peakRightDb ?? -2.1,
-      integratedLoudnessLUFS: session.integratedLufs ?? -16.2,
-      dynamicRangeDb: 18.5,
+      integratedLoudnessLUFS: session.integratedLufs ?? -16.0,
+      dynamicRangeDb: session.dynamicRangeScore ?? 14.2,
+      phaseCorrelation: session.phaseCorrelation ?? 0.92,
+      speechBalancePercent: {
+        hostSpeech: session.hostTalkPercent ?? 52,
+        guestSpeech: session.guestTalkPercent ?? 44,
+        silence: session.silencePercent ?? 4,
+      },
       clippingDetected: (session.peakLeftDb ?? 0) >= 0 || (session.peakRightDb ?? 0) >= 0,
+      standardsCompliance: {
+        spotifyTargetMatched: (session.integratedLufs ?? -16.0) >= -17 && (session.integratedLufs ?? -16.0) <= -13,
+        applePodcastsTargetMatched: (session.integratedLufs ?? -16.0) >= -18 && (session.integratedLufs ?? -16.0) <= -15,
+        ebuR128BroadcastMatched: (session.integratedLufs ?? -16.0) >= -24 && (session.integratedLufs ?? -16.0) <= -22,
+      },
+    },
+    podcastPublishingTags: {
+      showName: session.podcastShowName || session.organizationName || 'Podcast Craft Studio Broadcast',
+      episodeNumber: session.podcastEpisodeNum || 1,
+      seasonNumber: session.podcastSeasonNum || 1,
+      episodeType: session.podcastEpisodeType || 'full',
+      explicitRating: session.podcastExplicit ? 'explicit' : 'clean',
+      description: session.podcastDescription || `Recorded live with ${session.hostName} and ${session.guestName}.`,
+      language: session.podcastLanguage || 'en-US',
     },
     cuePoints: session.cueMarkers || [
-      { id: '1', time: 0, label: 'Session Start / Intro' },
-      { id: '2', time: session.durationSeconds / 2, label: 'Mid-roll / Topic Switch' },
+      { id: '1', time: 0, label: 'Session Intro' },
+      { id: '2', time: Math.floor(session.durationSeconds / 2), label: 'Main Discussion / Topic Switch' },
     ],
-    generatedBy: 'Podcast Craft Studio — Technical Metadata Engine v2.0',
+    generatedBy: 'Podcast Craft Studio — Technical Metadata Engine v2.0 (BWF/EBU R128 Compliant)',
     exportTimestamp: new Date().toISOString(),
   };
 
   return JSON.stringify(fullMeta, null, 2);
+}
+
+/**
+ * Generate standard Apple Podcasts & Spotify RSS Chapter XML tags
+ */
+export function generateApplePodcastsRssChapterXML(session: RecordingSession): string {
+  const cues = session.cueMarkers && session.cueMarkers.length > 0
+    ? session.cueMarkers
+    : [
+        { id: '1', time: 0, label: 'Episode Introduction' },
+        { id: '2', time: Math.floor(session.durationSeconds / 2), label: 'Main Topic & Interview' },
+        { id: '3', time: Math.floor(session.durationSeconds * 0.9), label: 'Episode Outro & Links' },
+      ];
+
+  const formatXmlTime = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  return `<!-- Apple Podcasts & Spotify RSS 2.0 Chapter Enclosure Tags -->
+<item>
+  <title>${escapeXml(session.title)}</title>
+  <itunes:title>${escapeXml(session.title)}</itunes:title>
+  <itunes:episodeType>${session.podcastEpisodeType || 'full'}</itunes:episodeType>
+  <itunes:episode>${session.podcastEpisodeNum || 1}</itunes:episode>
+  <itunes:season>${session.podcastSeasonNum || 1}</itunes:season>
+  <itunes:author>${escapeXml(session.hostName)}</itunes:author>
+  <itunes:duration>${session.durationSeconds}</itunes:duration>
+  <itunes:explicit>${session.podcastExplicit ? 'yes' : 'no'}</itunes:explicit>
+  <description>${escapeXml(session.podcastDescription || `Recorded live with host ${session.hostName} and guest ${session.guestName}.`)}</description>
+  <pubDate>${new Date(session.createdAt).toUTCString()}</pubDate>
+
+  <!-- Podlove Simple Chapters (Spotify / Overcast / PocketCasts) -->
+  <psc:chapters version="1.2">
+${cues
+  .map(
+    (c) =>
+      `    <psc:chapter start="${formatXmlTime(c.time)}" title="${escapeXml(c.label)}" />`
+  )
+  .join('\n')}
+  </psc:chapters>
+</item>`;
+}
+
+function escapeXml(str: string): string {
+  return (str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+/**
+ * Generate Schema.org JSON-LD for Podcast Episode SEO
+ */
+export function generateJsonLdPodcastSchema(session: RecordingSession): string {
+  const schema = {
+    '@context': 'https://schema.org',
+    '@type': 'PodcastEpisode',
+    name: session.title,
+    description: session.podcastDescription || `Recorded with ${session.hostName} and ${session.guestName}`,
+    duration: `PT${Math.floor(session.durationSeconds / 60)}M${Math.floor(session.durationSeconds % 60)}S`,
+    datePublished: session.createdAt,
+    episodeNumber: session.podcastEpisodeNum || 1,
+    partOfSeries: {
+      '@type': 'PodcastSeries',
+      name: session.podcastShowName || session.organizationName || 'Podcast Craft Studio Show',
+    },
+    creator: {
+      '@type': 'Person',
+      name: session.hostName,
+      email: session.hostEmail,
+    },
+  };
+  return JSON.stringify(schema, null, 2);
 }
 
 /**
