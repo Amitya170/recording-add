@@ -37,6 +37,7 @@ interface AuthContextValue {
   createInviteToken: (email: string) => InviteToken;
   getInviteToken: (token: string) => InviteToken | null;
   registerWithInvite: (token: string, name: string, password: string) => Promise<boolean>;
+  updateUser: (id: string, updates: { name?: string; password?: string }) => Promise<boolean>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -251,6 +252,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return ok;
   }, [getInviteToken, createHostAccount]);
 
+  const updateUser = useCallback(async (id: string, updates: { name?: string; password?: string }): Promise<boolean> => {
+    const users = getStoredUsers();
+    const userIndex = users.findIndex((u) => u.id === id);
+    if (userIndex === -1) return false;
+
+    if (updates.name && updates.name.trim()) {
+      users[userIndex].name = updates.name.trim();
+    }
+    if (updates.password && updates.password.trim()) {
+      users[userIndex].passwordHash = await hashPassword(updates.password.trim());
+    }
+
+    setStoredUsers(users);
+    if (currentUser?.id === id) {
+      setCurrentUser({ ...users[userIndex] });
+    }
+    return true;
+  }, [currentUser]);
+
   if (!initialized) return null;
 
   return (
@@ -268,6 +288,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         createInviteToken,
         getInviteToken,
         registerWithInvite,
+        updateUser,
       }}
     >
       {children}

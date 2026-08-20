@@ -33,6 +33,14 @@ export class NoiseSuppressionEngine {
     this.noiseThresholdDb = db;
   }
 
+  public getThresholdDb(): number {
+    return this.noiseThresholdDb;
+  }
+
+  public isGateEnabled(): boolean {
+    return this.isEnabled;
+  }
+
   private processAudio(e: AudioProcessingEvent) {
     const input = e.inputBuffer.getChannelData(0);
     const output = e.outputBuffer.getChannelData(0);

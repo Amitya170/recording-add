@@ -29,6 +29,7 @@ interface WaveformEditorProps {
   onBufferUpdate: (newBuffer: AudioBuffer) => void;
   onSpeakerBuffersUpdate?: (a: AudioBuffer | null, b: AudioBuffer | null) => void;
   onAddMarker: (time: number) => void;
+  seekTime?: number;
 }
 
 interface HistoryEntry {
@@ -44,6 +45,7 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
   onBufferUpdate,
   onSpeakerBuffersUpdate,
   onAddMarker,
+  seekTime,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -55,6 +57,14 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [baseWidth, setBaseWidth] = useState<number>(800);
   const [zoom, setZoom] = useState<number>(1.0); // 1.0 to 8.0x
+
+  // Jump playhead when external seekTime changes (e.g. from Transcript click)
+  useEffect(() => {
+    if (seekTime !== undefined && seekTime >= 0 && audioBuffer) {
+      setCurrentTime(Math.min(audioBuffer.duration, seekTime));
+    }
+  }, [seekTime, audioBuffer]);
+
 
   const [undoStack, setUndoStack] = useState<HistoryEntry[]>([]);
   const [redoStack, setRedoStack] = useState<HistoryEntry[]>([]);

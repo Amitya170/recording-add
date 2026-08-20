@@ -399,4 +399,23 @@ export function generateSessionsCSV(sessions: RecordingSession[]): string {
   return [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
 }
 
+export function deleteStoredSession(sessionId: string): void {
+  const sessions = getStoredSessions();
+  const filtered = sessions.filter((s) => s.id !== sessionId);
+  localStorage.setItem(SESSIONS_KEY, JSON.stringify(filtered));
+}
+
+export function purgeOldSessions(daysOld: number = 30): number {
+  const sessions = getStoredSessions();
+  const cutoffTime = Date.now() - daysOld * 24 * 60 * 60 * 1000;
+  const remaining = sessions.filter((s) => new Date(s.createdAt).getTime() >= cutoffTime);
+  const purgedCount = sessions.length - remaining.length;
+  localStorage.setItem(SESSIONS_KEY, JSON.stringify(remaining));
+  return purgedCount;
+}
+
+export function clearAllSessions(): void {
+  localStorage.setItem(SESSIONS_KEY, JSON.stringify([]));
+}
+
 

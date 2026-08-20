@@ -78,3 +78,37 @@ export async function getSessionAudioBlobs(sessionId: string): Promise<StoredAud
     return null;
   }
 }
+
+export async function deleteSessionAudioBlobs(sessionId: string): Promise<boolean> {
+  try {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+      const request = store.delete(sessionId);
+
+      request.onsuccess = () => resolve(true);
+      request.onerror = () => reject(request.error);
+    });
+  } catch (err) {
+    console.error('Error deleting audio blob from IndexedDB:', err);
+    return false;
+  }
+}
+
+export async function clearAllAudioBlobs(): Promise<boolean> {
+  try {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+      const request = store.clear();
+
+      request.onsuccess = () => resolve(true);
+      request.onerror = () => reject(request.error);
+    });
+  } catch (err) {
+    console.error('Error clearing audio blobs from IndexedDB:', err);
+    return false;
+  }
+}

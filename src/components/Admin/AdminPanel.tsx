@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useAuth } from '../../auth/AuthContext';
+import { useAuth, type User } from '../../auth/AuthContext';
 import {
   getAnalyticsSummary,
   getUserDurationReports,
@@ -10,6 +10,9 @@ import {
   generateCombinedMetadataTXT,
   generateSessionsCSV,
   updateSessionDriveStatus,
+  deleteStoredSession,
+  purgeOldSessions,
+  clearAllSessions,
   type RecordingSession,
   type UserDurationReport,
 } from '../../auth/SessionStore';
@@ -37,6 +40,11 @@ import {
   HelpCircle,
   Loader2,
   FolderSync,
+  X,
+  Key,
+  Edit2,
+  Database,
+  Zap,
 } from 'lucide-react';
 import { AudioMetadataModal } from './AudioMetadataModal';
 import { ExportModal } from '../Export/ExportModal';
@@ -44,7 +52,7 @@ import { encodeWav } from '../../audio/encoders/WavEncoder';
 import { DriveUploadNotificationModal } from '../Modals/DriveUploadNotificationModal';
 import { ThemeToggle } from '../Common/ThemeToggle';
 
-import { getSessionAudioBlobs } from '../../auth/CloudAudioStore';
+import { getSessionAudioBlobs, deleteSessionAudioBlobs, clearAllAudioBlobs } from '../../auth/CloudAudioStore';
 import {
   getGoogleDriveWebhookUrl,
   setGoogleDriveWebhookUrl,
@@ -53,12 +61,14 @@ import {
   getAutoUploadToDrive,
   setAutoUploadToDrive,
   uploadAudioBlobToDrive,
+  testGoogleDriveConnection,
   APPS_SCRIPT_TEMPLATE,
 } from '../../auth/GoogleDriveUploader';
 
 export const AdminPanel: React.FC = () => {
-  const { getAllUsers, createHostAccount, deleteUser, currentUser, logout } = useAuth();
+  const { getAllUsers, createHostAccount, deleteUser, updateUser, currentUser, logout } = useAuth();
 
+  const [activeTab, setActiveTab] = useState<'overview' | 'sessions' | 'users' | 'cloud'>('overview');
   const [userReports, setUserReports] = useState<UserDurationReport[]>([]);
   const [sessions, setSessions] = useState<RecordingSession[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -71,7 +81,14 @@ export const AdminPanel: React.FC = () => {
   });
 
   const [storageInfo, setStorageInfo] = useState({ usedMb: 0, limitMb: 5120 });
-  const [previewingSessionId, setPreviewingSessionId] = useState<string | null>(null);
+  const [storageActionMsg, setStorageActionMsg] = useState<string | null>(null);
+  
+  // Audition Player State
+  const [previewingSession, setPreviewingSession] = useState<RecordingSession | null>(null);
+  const [auditionCurrentTime, setAuditionCurrentTime] = useState(0);
+  const [auditionDuration, setAuditionDuration] = useState(0);
+  const [auditionIsPlaying, setAuditionIsPlaying] = useState(false);
+  const [auditionSpeed, setAuditionSpeed] = useState(1.0);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Google Drive Cloud Storage Settings State
@@ -84,6 +101,15 @@ export const AdminPanel: React.FC = () => {
   const [uploadingSessionId, setUploadingSessionId] = useState<string | null>(null);
   const [uploadProgressMap, setUploadProgressMap] = useState<Record<string, { progress: number; stageText: string }>>({});
   const [driveUploadMessage, setDriveUploadMessage] = useState<{ id: string; success: boolean; text: string; url?: string } | null>(null);
+  const [testingDriveConnection, setTestingDriveConnection] = useState(false);
+  const [testDriveResult, setTestDriveResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  // Edit Host / Reset Password Modal State
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [editUserName, setEditUserName] = useState('');
+  const [editUserPassword, setEditUserPassword] = useState('');
+  const [editUserMsg, setEditUserMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
   const [drivePopupModal, setDrivePopupModal] = useState<{
     type: 'success' | 'error';
     title: string;
@@ -138,6 +164,112 @@ export const AdminPanel: React.FC = () => {
     speakerBBuffer: AudioBuffer;
   } | null>(null);
 
+  const refreshData = useCallback(() => {
+    const allUsers = getAllUsers();
+    const reports = getUserDurationReports(allUsers);
+    setUserReports(reports);
+    const sess = getStoredSessions();
+    setSessions(sess);
+    setSummary(getAnalyticsSummary(allUsers.length));
+  }, [getAllUsers]);
+
+  useEffect(() => {
+    refreshData();
+    const interval = setInterval(refreshData, 3000);
+    const handleStorage = () => refreshData();
+    window.addEventListener('storage', handleStorage);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') refreshData();
+    });
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [refreshData]);
+
+  // Deletion and Storage Maintenance Handlers
+  const handleDeleteSingleSession = async (session: RecordingSession) => {
+    if (window.confirm(`Are you sure you want to delete "${session.title}"? This permanently frees the recorded audio blobs and metadata.`)) {
+      if (previewingSession?.id === session.id) {
+        handleCloseAudition();
+      }
+      deleteStoredSession(session.id);
+      await deleteSessionAudioBlobs(session.id);
+      refreshData();
+      setStorageActionMsg(`Deleted session "${session.title}".`);
+      setTimeout(() => setStorageActionMsg(null), 3000);
+    }
+  };
+
+  const handlePurgeOldSessions = async (days: number = 30) => {
+    if (window.confirm(`Purge all recorded podcast sessions older than ${days} days to reclaim storage?`)) {
+      const purged = purgeOldSessions(days);
+      refreshData();
+      setStorageActionMsg(`Purged ${purged} session(s) older than ${days} days.`);
+      setTimeout(() => setStorageActionMsg(null), 3500);
+    }
+  };
+
+  const handleClearAllStorage = async () => {
+    if (window.confirm('⚠️ DANGER: Permanently clear all stored podcast sessions and audio files from browser cache?')) {
+      if (window.confirm('Are you absolutely certain? This cannot be undone.')) {
+        handleCloseAudition();
+        clearAllSessions();
+        await clearAllAudioBlobs();
+        refreshData();
+        setStorageActionMsg('All studio recording storage has been reset.');
+        setTimeout(() => setStorageActionMsg(null), 3500);
+      }
+    }
+  };
+
+  // Google Drive Webhook Test Connection
+  const handleTestDriveConnection = async () => {
+    setTestingDriveConnection(true);
+    setTestDriveResult(null);
+    try {
+      const res = await testGoogleDriveConnection(driveWebhookUrl);
+      setTestDriveResult(res);
+    } catch (err: any) {
+      setTestDriveResult({
+        success: false,
+        message: err?.message || 'Failed to ping Google Apps Script.',
+      });
+    } finally {
+      setTestingDriveConnection(false);
+    }
+  };
+
+  // Edit Host / Reset Password Handlers
+  const handleOpenEditUser = (user: User) => {
+    setEditingUser(user);
+    setEditUserName(user.name);
+    setEditUserPassword('');
+    setEditUserMsg(null);
+  };
+
+  const handleSaveEditUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingUser) return;
+    setEditUserMsg(null);
+
+    const ok = await updateUser(editingUser.id, {
+      name: editUserName,
+      password: editUserPassword || undefined,
+    });
+
+    if (ok) {
+      setEditUserMsg({ type: 'success', text: `Updated ${editingUser.email} successfully!` });
+      refreshData();
+      setTimeout(() => {
+        setEditingUser(null);
+        setEditUserMsg(null);
+      }, 1500);
+    } else {
+      setEditUserMsg({ type: 'error', text: 'Failed to update user.' });
+    }
+  };
+
   const handleAdminExportSession = async (session: RecordingSession) => {
     const stored = await getSessionAudioBlobs(session.id);
     if (stored && stored.stereoBlob) {
@@ -181,13 +313,18 @@ export const AdminPanel: React.FC = () => {
 
   const handleTogglePreviewAudio = async (session: RecordingSession) => {
     if (previewAudioRef.current) {
+      if (previewingSession?.id === session.id) {
+        if (auditionIsPlaying) {
+          previewAudioRef.current.pause();
+          setAuditionIsPlaying(false);
+        } else {
+          previewAudioRef.current.play();
+          setAuditionIsPlaying(true);
+        }
+        return;
+      }
       previewAudioRef.current.pause();
       previewAudioRef.current = null;
-    }
-
-    if (previewingSessionId === session.id) {
-      setPreviewingSessionId(null);
-      return;
     }
 
     let blobToPlay: Blob | null = null;
@@ -203,23 +340,61 @@ export const AdminPanel: React.FC = () => {
       const url = URL.createObjectURL(blobToPlay);
       const audio = new Audio(url);
       previewAudioRef.current = audio;
-      setPreviewingSessionId(session.id);
+      setPreviewingSession(session);
+      setAuditionIsPlaying(true);
+      audio.playbackRate = auditionSpeed;
+
+      audio.ontimeupdate = () => {
+        setAuditionCurrentTime(audio.currentTime);
+        if (audio.duration && !isNaN(audio.duration)) {
+          setAuditionDuration(audio.duration);
+        }
+      };
+
+      audio.onloadedmetadata = () => {
+        setAuditionDuration(audio.duration || session.durationSeconds);
+      };
 
       audio.onended = () => {
-        setPreviewingSessionId(null);
-        URL.revokeObjectURL(url);
+        setAuditionIsPlaying(false);
+        setAuditionCurrentTime(0);
       };
 
       audio.onerror = () => {
-        setPreviewingSessionId(null);
-        URL.revokeObjectURL(url);
+        setPreviewingSession(null);
+        setAuditionIsPlaying(false);
       };
 
       audio.play().catch((err) => {
         console.warn('Playback error:', err);
-        setPreviewingSessionId(null);
+        setPreviewingSession(null);
+        setAuditionIsPlaying(false);
       });
     }
+  };
+
+  const handleAuditionSeek = (seconds: number) => {
+    if (previewAudioRef.current) {
+      previewAudioRef.current.currentTime = seconds;
+      setAuditionCurrentTime(seconds);
+    }
+  };
+
+  const handleAuditionSpeedChange = (speed: number) => {
+    setAuditionSpeed(speed);
+    if (previewAudioRef.current) {
+      previewAudioRef.current.playbackRate = speed;
+    }
+  };
+
+  const handleCloseAudition = () => {
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+    }
+    setPreviewingSession(null);
+    setAuditionIsPlaying(false);
+    setAuditionCurrentTime(0);
   };
 
   const handleExportCombinedJSON = () => {
@@ -374,29 +549,6 @@ export const AdminPanel: React.FC = () => {
     }
   };
 
-  const refreshData = useCallback(() => {
-    const allUsers = getAllUsers();
-    const reports = getUserDurationReports(allUsers);
-    setUserReports(reports);
-    const sess = getStoredSessions();
-    setSessions(sess);
-    setSummary(getAnalyticsSummary(allUsers.length));
-  }, [getAllUsers]);
-
-  useEffect(() => {
-    refreshData();
-    const interval = setInterval(refreshData, 3000);
-    const handleStorage = () => refreshData();
-    window.addEventListener('storage', handleStorage);
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') refreshData();
-    });
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener('storage', handleStorage);
-    };
-  }, [refreshData]);
-
   const handleCreateHost = async (e: React.FormEvent) => {
     e.preventDefault();
     setAddError('');
@@ -428,146 +580,480 @@ export const AdminPanel: React.FC = () => {
     }
   };
 
-  // Find max duration for progress bars
   const maxDuration = Math.max(1, ...userReports.map((r) => r.totalDurationSeconds));
 
   return (
     <div className="admin-page">
-      {/* Admin Top Bar */}
+      {/* Admin Top Bar with Tabs Navigation */}
       <header className="admin-header">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <Shield size={24} className="daw-logo-icon" />
             <div>
-              <h1 className="daw-title" style={{ fontSize: '1.2rem' }}>ADMIN ANALYTICS & DURATION DASHBOARD</h1>
-              <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>System Reports & User Management Console</div>
+              <h1 className="daw-title" style={{ fontSize: '1.15rem' }}>ADMIN CREATOR CONSOLE</h1>
+              <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>System Intelligence, Studio Sessions & User Governance</div>
             </div>
-            <span className="daw-badge">ADMINISTRATOR ONLY</span>
+          </div>
+
+          {/* Center Tabs Navigation */}
+          <div className="admin-nav-tabs">
+            <button
+              type="button"
+              className={`admin-nav-tab ${activeTab === 'overview' ? 'is-active' : ''}`}
+              onClick={() => setActiveTab('overview')}
+            >
+              <BarChart3 size={14} />
+              <span>Overview</span>
+            </button>
+
+            <button
+              type="button"
+              className={`admin-nav-tab ${activeTab === 'sessions' ? 'is-active' : ''}`}
+              onClick={() => setActiveTab('sessions')}
+            >
+              <Mic size={14} />
+              <span>Sessions</span>
+              <span className="admin-tab-badge">{sessions.length}</span>
+            </button>
+
+            <button
+              type="button"
+              className={`admin-nav-tab ${activeTab === 'users' ? 'is-active' : ''}`}
+              onClick={() => setActiveTab('users')}
+            >
+              <Users size={14} />
+              <span>Host Accounts</span>
+              <span className="admin-tab-badge">{userReports.length}</span>
+            </button>
+
+            <button
+              type="button"
+              className={`admin-nav-tab ${activeTab === 'cloud' ? 'is-active' : ''}`}
+              onClick={() => setActiveTab('cloud')}
+            >
+              <FolderSync size={14} />
+              <span>Cloud Storage</span>
+              {autoUploadDrive && <span className="admin-tab-badge" style={{ color: 'var(--accent-green)' }}>AUTO</span>}
+            </button>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <ThemeToggle />
-            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-              Logged in: <strong style={{ color: 'var(--accent-cyan)' }}>{currentUser?.name}</strong> ({currentUser?.email})
+            <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+              <strong style={{ color: 'var(--accent-cyan)' }}>{currentUser?.name}</strong>
             </div>
-            <button className="btn-transport user-menu-danger" onClick={logout} style={{ height: '34px', padding: '0 12px' }}>
-              <LogOut size={14} /> Sign Out
+            <button className="creator-quick-btn active-red" onClick={logout} style={{ height: '30px' }}>
+              <LogOut size={13} /> Sign Out
             </button>
           </div>
         </div>
       </header>
 
-      {/* Analytics Dashboard Content */}
-      <main className="admin-dashboard-main">
-        {/* Top 4 Stat Summary Cards */}
-        <section className="stat-cards-grid">
-          <div className="card-panel stat-card">
-            <div className="stat-card-header">
-              <span>TOTAL HOST USERS</span>
-              <Users size={18} color="var(--accent-cyan)" />
+      {/* Global Notification Banner for Storage Actions */}
+      {storageActionMsg && (
+        <div style={{ margin: '8px 24px -6px 24px', padding: '8px 14px', background: 'rgba(0, 240, 255, 0.12)', border: '1px solid var(--accent-cyan)', borderRadius: '8px', color: 'var(--accent-cyan)', fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '8px', animation: 'fadeSlideUp 0.3s ease' }}>
+          <CheckCircle size={14} /> <span>{storageActionMsg}</span>
+        </div>
+      )}
+
+      {/* Main Admin Content Views */}
+      <main className="admin-dashboard-main" style={{ padding: '16px 24px', overflowY: 'auto' }}>
+        
+        {/* TAB 1: OVERVIEW & SYSTEM HEALTH */}
+        {activeTab === 'overview' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {/* Top 4 Stat Summary Cards */}
+            <section className="stat-cards-grid">
+              <div className="card-panel stat-card">
+                <div className="stat-card-header">
+                  <span>TOTAL HOST USERS</span>
+                  <Users size={18} color="var(--accent-cyan)" />
+                </div>
+                <div className="stat-card-val">{summary.totalUsers}</div>
+                <div className="stat-card-sub">Active Registered Hosts</div>
+              </div>
+
+              <div className="card-panel stat-card">
+                <div className="stat-card-header">
+                  <span>TOTAL PODCAST SESSIONS</span>
+                  <Mic size={18} color="var(--accent-amber)" />
+                </div>
+                <div className="stat-card-val">{summary.totalSessions}</div>
+                <div className="stat-card-sub">Dual-Channel Studio Recordings</div>
+              </div>
+
+              <div className="card-panel stat-card">
+                <div className="stat-card-header">
+                  <span>CUMULATIVE DURATION</span>
+                  <Clock size={18} color="var(--accent-green)" />
+                </div>
+                <div className="stat-card-val" style={{ color: 'var(--accent-green)' }}>
+                  {formatDuration(summary.totalDurationSeconds)}
+                </div>
+                <div className="stat-card-sub">Total On-Air Studio Time</div>
+              </div>
+
+              <div className="card-panel stat-card">
+                <div className="stat-card-header">
+                  <span>AVG SESSION LENGTH</span>
+                  <BarChart3 size={18} color="#c084fc" />
+                </div>
+                <div className="stat-card-val" style={{ color: '#c084fc' }}>
+                  {formatDuration(summary.avgDurationSeconds)}
+                </div>
+                <div className="stat-card-sub">Average Recording Duration</div>
+              </div>
+            </section>
+
+            {/* Studio Health & Storage Monitor */}
+            <section className="card-panel" style={{ padding: '16px 20px' }}>
+              <div className="card-header" style={{ marginBottom: '12px', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Shield size={16} color="var(--accent-cyan)" />
+                  <span>SYSTEM HEALTH & INFRASTRUCTURE STATUS</span>
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    className="creator-quick-btn"
+                    onClick={() => handlePurgeOldSessions(30)}
+                    title="Purge recorded sessions older than 30 days"
+                    style={{ fontSize: '0.68rem', padding: '3px 8px' }}
+                  >
+                    <Database size={11} /> Purge &gt;30d Sessions
+                  </button>
+                  <button
+                    className="creator-quick-btn active-red"
+                    onClick={handleClearAllStorage}
+                    title="Clear all stored audio and session logs"
+                    style={{ fontSize: '0.68rem', padding: '3px 8px' }}
+                  >
+                    <Trash2 size={11} /> Reset All Storage
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '20px', alignItems: 'center' }}>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px', fontSize: '0.75rem' }}>
+                    <span style={{ color: 'var(--text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <FileAudio size={14} color="var(--accent-cyan)" />
+                      IndexedDB Browser Storage:
+                    </span>
+                    <strong style={{ color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>
+                      {storageInfo.usedMb} MB / {(storageInfo.limitMb / 1024).toFixed(1)} GB
+                    </strong>
+                  </div>
+                  <div style={{ height: '6px', background: 'var(--bg-surface)', borderRadius: '3px', overflow: 'hidden', border: '1px solid var(--border-dim)' }}>
+                    <div
+                      style={{
+                        width: `${Math.max(1, (storageInfo.usedMb / storageInfo.limitMb) * 100).toFixed(1)}%`,
+                        height: '100%',
+                        background: 'linear-gradient(90deg, var(--accent-cyan), #00ff87)',
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px', fontSize: '0.75rem' }}>
+                    <span style={{ color: 'var(--text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <CheckCircle size={14} color="var(--accent-green)" />
+                      P2P WebRTC Signaling:
+                    </span>
+                    <strong style={{ color: 'var(--accent-green)', fontFamily: 'var(--font-mono)' }}>ONLINE (Active)</strong>
+                  </div>
+                  <div style={{ height: '6px', background: 'var(--bg-surface)', borderRadius: '3px', overflow: 'hidden', border: '1px solid var(--border-dim)' }}>
+                    <div style={{ width: '100%', height: '100%', background: 'var(--accent-green)' }} />
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px', fontSize: '0.75rem' }}>
+                    <span style={{ color: 'var(--text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <CloudUpload size={14} color="#7c3aed" />
+                      Google Drive Cloud Sync:
+                    </span>
+                    <strong style={{ color: '#7c3aed', fontFamily: 'var(--font-mono)' }}>
+                      {autoUploadDrive ? 'AUTO-SYNC ACTIVE' : (driveWebhookUrl ? 'MANUAL SYNC' : 'NOT CONFIGURED')}
+                    </strong>
+                  </div>
+                  <div style={{ height: '6px', background: 'var(--bg-surface)', borderRadius: '3px', overflow: 'hidden', border: '1px solid var(--border-dim)' }}>
+                    <div style={{ width: driveWebhookUrl ? '100%' : '20%', height: '100%', background: driveWebhookUrl ? '#7c3aed' : 'var(--accent-amber)' }} />
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* Quick Actions Bar */}
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              <button className="creator-quick-btn active-cyan" onClick={() => setActiveTab('sessions')}>
+                <Mic size={14} /> View All {sessions.length} Recording Sessions
+              </button>
+              <button className="creator-quick-btn" onClick={() => setActiveTab('users')}>
+                <Users size={14} /> Manage Host Accounts
+              </button>
+              <button className="creator-quick-btn" onClick={() => setActiveTab('cloud')}>
+                <FolderSync size={14} /> Configure Google Drive Cloud Backup
+              </button>
             </div>
-            <div className="stat-card-val">{summary.totalUsers}</div>
-            <div className="stat-card-sub">Registered Host Accounts</div>
           </div>
+        )}
 
-          <div className="card-panel stat-card">
-            <div className="stat-card-header">
-              <span>TOTAL PODCAST SESSIONS</span>
-              <Mic size={18} color="var(--accent-amber)" />
+        {/* TAB 2: SESSIONS & MASTER EXPORTS */}
+        {activeTab === 'sessions' && (
+          <div className="card-panel" style={{ flex: 1, minHeight: 0 }}>
+            <div className="card-header" style={{ flexWrap: 'wrap', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <FileAudio size={16} className="daw-logo-icon" />
+                <span>RECORDED PODCAST SESSIONS & MASTER STEM EXPORTS</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                <span className="tag">{sessions.length} SESSIONS LOGGED</span>
+                {sessions.length > 0 && (
+                  <>
+                    <button
+                      className="creator-quick-btn"
+                      onClick={() => handlePurgeOldSessions(30)}
+                      title="Purge sessions older than 30 days"
+                    >
+                      <Database size={12} /> Purge &gt;30d
+                    </button>
+                    <button
+                      className="creator-quick-btn"
+                      onClick={handleExportCombinedCSV}
+                      title="Export All Sessions as Spreadsheet CSV"
+                    >
+                      <FileSpreadsheet size={12} /> Export CSV
+                    </button>
+                    <button
+                      className="creator-quick-btn"
+                      onClick={handleExportCombinedJSON}
+                      title="Export Combined Technical Metadata for All Sessions as JSON"
+                    >
+                      <FileCode size={12} /> Meta (JSON)
+                    </button>
+                    <button
+                      className="creator-quick-btn active-cyan"
+                      onClick={handleExportCombinedTXT}
+                      title="Export Aggregated Text Report for All Sessions"
+                    >
+                      <Download size={12} /> Report (.TXT)
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
-            <div className="stat-card-val">{summary.totalSessions}</div>
-            <div className="stat-card-sub">Recorded Dual-Channel Audio Sessions</div>
+
+            {/* Search & Filter Bar */}
+            {sessions.length > 0 && (
+              <div style={{ display: 'flex', gap: '8px', padding: '10px 14px', background: 'var(--bg-darker)', borderBottom: '1px solid var(--border-dim)', alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1, minWidth: '220px', background: 'var(--bg-darkest)', borderRadius: '6px', padding: '0 10px', border: '1px solid var(--border-dim)' }}>
+                  <Search size={13} color="var(--text-muted)" />
+                  <input
+                    className="daw-input"
+                    style={{ border: 'none', background: 'transparent', padding: '6px 0', fontSize: '0.75rem', height: '30px' }}
+                    placeholder="Filter sessions by title, host, guest or email..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+                <select
+                  className="daw-select"
+                  style={{ width: '140px', height: '30px', fontSize: '0.72rem', padding: '2px 8px' }}
+                  value={filterFormat}
+                  onChange={(e) => setFilterFormat(e.target.value)}
+                >
+                  <option value="all">All Formats</option>
+                  <option value="wav">WAV Formats</option>
+                  <option value="float">32-Bit Float</option>
+                </select>
+              </div>
+            )}
+
+            <div className="admin-table-wrap">
+              {sessions.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                  No recorded podcast sessions logged yet. When Hosts record in the Studio, their sessions will appear here with full technical metadata, stem downloads, and Google Drive sync.
+                </div>
+              ) : (
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>PREVIEW</th>
+                      <th>SESSION TITLE</th>
+                      <th>HOST SPEAKER</th>
+                      <th>GUEST SPEAKER</th>
+                      <th>DURATION</th>
+                      <th>GOOGLE DRIVE</th>
+                      <th>DATE RECORDED</th>
+                      <th>FORMAT</th>
+                      <th>ACTIONS</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sessions
+                      .filter((s) => {
+                        const q = (searchQuery || '').toLowerCase();
+                        const matchesQuery =
+                          !q ||
+                          (s.title || '').toLowerCase().includes(q) ||
+                          (s.hostName || '').toLowerCase().includes(q) ||
+                          (s.guestName || '').toLowerCase().includes(q) ||
+                          (s.hostEmail || '').toLowerCase().includes(q);
+                        const matchesFormat = filterFormat === 'all' || (s.format || '').toLowerCase().includes(filterFormat.toLowerCase());
+                        return matchesQuery && matchesFormat;
+                      })
+                      .map((s) => (
+                        <tr key={s.id}>
+                          <td>
+                            <button
+                              className={`creator-quick-btn ${previewingSession?.id === s.id ? 'active-cyan' : ''}`}
+                              style={{ padding: '4px 8px', height: '26px' }}
+                              onClick={() => handleTogglePreviewAudio(s)}
+                              title={previewingSession?.id === s.id && auditionIsPlaying ? 'Pause Audition' : 'Audition / Preview Session Audio'}
+                            >
+                              {previewingSession?.id === s.id && auditionIsPlaying ? <Pause size={12} /> : <Play size={12} />}
+                            </button>
+                          </td>
+                          <td style={{ fontWeight: 600 }}>
+                            <div>{s.title}</div>
+                            {driveUploadMessage?.id === s.id && (
+                              <div style={{ fontSize: '0.68rem', marginTop: '2px', color: driveUploadMessage.success ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                                {driveUploadMessage.text}{' '}
+                                {driveUploadMessage.url && (
+                                  <a href={driveUploadMessage.url} target="_blank" rel="noreferrer" style={{ textDecoration: 'underline', color: 'var(--accent-green)' }}>
+                                    Open Drive File ↗
+                                  </a>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                          <td>{s.hostName}</td>
+                          <td style={{ color: 'var(--accent-amber)' }}>{s.guestName}</td>
+                          <td style={{ minWidth: '100px' }}>
+                            <div style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '5px',
+                              fontFamily: 'var(--font-mono)',
+                              color: 'var(--accent-cyan)',
+                              fontWeight: 700,
+                              background: 'rgba(2, 132, 199, 0.1)',
+                              border: '1px solid var(--border-dim)',
+                              padding: '3px 8px',
+                              borderRadius: '6px',
+                              fontSize: '0.72rem',
+                            }}>
+                              <Clock size={11} color="var(--accent-cyan)" />
+                              <span>{formatDuration(s.durationSeconds)}</span>
+                            </div>
+                          </td>
+                          <td>
+                            {uploadingSessionId === s.id ? (
+                              <div style={{ minWidth: '130px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.68rem', color: 'var(--accent-cyan)' }}>
+                                  <Loader2 size={11} className="animate-spin" />
+                                  <span>Syncing ({uploadProgressMap[s.id]?.progress || 0}%)</span>
+                                </div>
+                                <div style={{ width: '100%', height: '5px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', marginTop: '3px' }}>
+                                  <div style={{ width: `${uploadProgressMap[s.id]?.progress || 0}%`, height: '100%', background: 'var(--accent-cyan)', borderRadius: '3px', transition: 'width 0.3s' }} />
+                                </div>
+                              </div>
+                            ) : s.driveFileUrl ? (
+                              <a
+                                href={s.driveFileUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                style={{
+                                  padding: '4px 10px',
+                                  fontSize: '0.7rem',
+                                  fontWeight: 600,
+                                  background: 'rgba(0, 255, 135, 0.12)',
+                                  color: 'var(--accent-green)',
+                                  border: '1px solid rgba(0, 255, 135, 0.3)',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '5px',
+                                  borderRadius: '6px',
+                                  textDecoration: 'none',
+                                }}
+                                title="Open audio file in Google Drive"
+                              >
+                                <CheckCircle size={12} /> Google Drive ↗
+                              </a>
+                            ) : (
+                              <button
+                                className="creator-quick-btn"
+                                style={{
+                                  padding: '3px 8px',
+                                  fontSize: '0.7rem',
+                                  borderColor: 'rgba(255, 183, 0, 0.35)',
+                                  color: 'var(--accent-amber)',
+                                }}
+                                onClick={() => handleUploadSessionToDrive(s)}
+                                title="Upload this session audio to Google Drive"
+                              >
+                                <CloudUpload size={12} /> Sync Drive
+                              </button>
+                            )}
+                          </td>
+                          <td style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                            {new Date(s.createdAt).toLocaleDateString()}
+                          </td>
+                          <td style={{ fontSize: '0.7rem' }}>
+                            <span className="daw-badge">{s.format}</span>
+                            {s.fileSizeMb ? (
+                              <span style={{ marginLeft: '4px', color: 'var(--text-muted)', fontSize: '0.65rem', fontFamily: 'var(--font-mono)' }}>
+                                {s.fileSizeMb}MB
+                              </span>
+                            ) : null}
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', gap: '6px' }}>
+                              <button
+                                className="creator-quick-btn"
+                                onClick={() => setSelectedSessionForMetadata(s)}
+                                title="Inspect Full Technical Audio Metadata"
+                              >
+                                <FileCode size={12} /> Meta
+                              </button>
+                              <button
+                                className="creator-quick-btn active-cyan"
+                                onClick={() => handleAdminExportSession(s)}
+                                title="Export Host Session Audio File (Admin Exclusive)"
+                              >
+                                <Download size={12} /> Export
+                              </button>
+                              <button
+                                className="creator-quick-btn active-red"
+                                onClick={() => handleDeleteSingleSession(s)}
+                                title="Delete session and release audio storage"
+                                style={{ padding: '4px 6px' }}
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
+        )}
 
-          <div className="card-panel stat-card">
-            <div className="stat-card-header">
-              <span>CUMULATIVE RECORDED DURATION</span>
-              <Clock size={18} color="var(--accent-green)" />
-            </div>
-            <div className="stat-card-val" style={{ color: 'var(--accent-green)' }}>
-              {formatDuration(summary.totalDurationSeconds)}
-            </div>
-            <div className="stat-card-sub">Total Studio Recording Time Across All Hosts</div>
-          </div>
-
-          <div className="card-panel stat-card">
-            <div className="stat-card-header">
-              <span>AVERAGE SESSION DURATION</span>
-              <BarChart3 size={18} color="#c084fc" />
-            </div>
-            <div className="stat-card-val" style={{ color: '#c084fc' }}>
-              {formatDuration(summary.avgDurationSeconds)}
-            </div>
-            <div className="stat-card-sub">Avg Length Per Session</div>
-          </div>
-        </section>
-
-        {/* Studio Health & Storage Monitor (Clean Streamlined Status Bar) */}
-        <section className="card-panel" style={{ padding: '14px 18px', marginBottom: '14px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '18px', alignItems: 'center' }}>
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontSize: '0.75rem' }}>
-                <span style={{ color: 'var(--text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <FileAudio size={14} color="var(--accent-cyan)" />
-                  IndexedDB Audio Storage:
-                </span>
-                <strong style={{ color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>
-                  {storageInfo.usedMb} MB / {(storageInfo.limitMb / 1024).toFixed(1)} GB Available
-                </strong>
-              </div>
-              <div style={{ height: '5px', background: 'var(--bg-surface)', borderRadius: '3px', overflow: 'hidden', border: '1px solid var(--border-dim)' }}>
-                <div
-                  style={{
-                    width: `${Math.max(1, (storageInfo.usedMb / storageInfo.limitMb) * 100).toFixed(1)}%`,
-                    height: '100%',
-                    background: 'var(--accent-cyan)',
-                  }}
-                />
-              </div>
-            </div>
-
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontSize: '0.75rem' }}>
-                <span style={{ color: 'var(--text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <CheckCircle size={14} color="var(--accent-green)" />
-                  P2P WebRTC Signaling:
-                </span>
-                <strong style={{ color: 'var(--accent-green)', fontFamily: 'var(--font-mono)' }}>ONLINE (STUN/ICE Active)</strong>
-              </div>
-              <div style={{ height: '5px', background: 'var(--bg-surface)', borderRadius: '3px', overflow: 'hidden', border: '1px solid var(--border-dim)' }}>
-                <div style={{ width: '100%', height: '100%', background: 'var(--accent-green)' }} />
-              </div>
-            </div>
-
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontSize: '0.75rem' }}>
-                <span style={{ color: 'var(--text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <CloudUpload size={14} color="#7c3aed" />
-                  Google Drive Cloud Sync:
-                </span>
-                <strong style={{ color: '#7c3aed', fontFamily: 'var(--font-mono)' }}>
-                  {autoUploadDrive ? 'AUTO-SYNC ACTIVE (Silent Upload)' : 'MANUAL'}
-                </strong>
-              </div>
-              <div style={{ height: '5px', background: 'var(--bg-surface)', borderRadius: '3px', overflow: 'hidden', border: '1px solid var(--border-dim)' }}>
-                <div style={{ width: '100%', height: '100%', background: '#7c3aed' }} />
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Main 2-Column Section */}
-        <section className="admin-grid" style={{ padding: 0 }}>
-          {/* Left Column: User Recording Duration Reports */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', minWidth: 0 }}>
-            {/* User Duration Table */}
-            <div className="card-panel" style={{ flex: 1 }}>
+        {/* TAB 3: HOST USER MANAGEMENT */}
+        {activeTab === 'users' && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '16px' }}>
+            {/* Host Activity Leaderboard Table */}
+            <div className="card-panel">
               <div className="card-header">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <BarChart3 size={16} className="daw-logo-icon" />
-                  <span>USER DURATION & ACTIVITY REPORT</span>
+                  <Users size={16} className="daw-logo-icon" />
+                  <span>HOST ACTIVITY & RECORDING LEADERBOARD</span>
                 </div>
-                <span className="tag">REALTIME STATS</span>
+                <span className="tag">{userReports.length} HOSTS</span>
               </div>
 
               <div className="admin-table-wrap">
@@ -576,15 +1062,15 @@ export const AdminPanel: React.FC = () => {
                     <tr>
                       <th>HOST SPEAKER</th>
                       <th>EMAIL</th>
-                      <th>ROLE</th>
                       <th>SESSIONS</th>
-                      <th>TOTAL RECORDING DURATION</th>
+                      <th>TOTAL DURATION</th>
                       <th>ACTIONS</th>
                     </tr>
                   </thead>
                   <tbody>
                     {userReports.map((report) => {
                       const percent = Math.min(100, (report.totalDurationSeconds / maxDuration) * 100);
+                      const userObj = getAllUsers().find((u) => u.id === report.userId);
                       return (
                         <tr key={report.userId}>
                           <td>
@@ -596,32 +1082,39 @@ export const AdminPanel: React.FC = () => {
                             </div>
                           </td>
                           <td style={{ color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>{report.userEmail}</td>
-                          <td>
-                            <span className={`role-badge ${report.role === 'admin' ? 'role-admin' : 'role-user'}`}>
-                              {report.role.toUpperCase()}
-                            </span>
-                          </td>
                           <td style={{ textAlign: 'center', fontWeight: 600 }}>{report.totalSessions}</td>
                           <td>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                              <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--accent-green)' }}>
+                              <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--accent-green)', fontSize: '0.72rem' }}>
                                 {formatDuration(report.totalDurationSeconds)}
                               </div>
-                              <div style={{ height: '4px', background: '#090d14', borderRadius: '2px', overflow: 'hidden' }}>
+                              <div style={{ height: '4px', background: 'var(--bg-surface)', borderRadius: '2px', overflow: 'hidden' }}>
                                 <div style={{ height: '100%', width: `${percent}%`, background: 'var(--accent-green)' }} />
                               </div>
                             </div>
                           </td>
                           <td>
-                            {report.userId !== currentUser?.id && (
-                              <button
-                                className="btn-icon-danger"
-                                onClick={() => handleDeleteUser(report.userId)}
-                                title="Delete Account"
-                              >
-                                <Trash2 size={13} />
-                              </button>
-                            )}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              {userObj && (
+                                <button
+                                  className="creator-quick-btn"
+                                  onClick={() => handleOpenEditUser(userObj)}
+                                  title="Edit Host Details & Reset Password"
+                                  style={{ padding: '4px 6px' }}
+                                >
+                                  <Edit2 size={12} />
+                                </button>
+                              )}
+                              {report.userId !== currentUser?.id && (
+                                <button
+                                  className="btn-icon-danger"
+                                  onClick={() => handleDeleteUser(report.userId)}
+                                  title="Delete Host Account"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -631,322 +1124,7 @@ export const AdminPanel: React.FC = () => {
               </div>
             </div>
 
-            {/* Session History Logs */}
-            <div className="card-panel" style={{ flex: 1, minHeight: 0 }}>
-              <div className="card-header" style={{ flexWrap: 'wrap', gap: '8px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <FileAudio size={16} className="daw-logo-icon" />
-                  <span>RECORDED SESSION LOGS & METRICS</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                  <span className="tag">{sessions.length} SESSIONS LOGGED</span>
-                  {sessions.length > 0 && (
-                    <>
-                      <button
-                        className="btn-transport btn-cyan"
-                        style={{ padding: '4px 8px', height: '24px', fontSize: '0.68rem' }}
-                        onClick={handleExportCombinedCSV}
-                        title="Export All Sessions as Spreadsheet CSV"
-                      >
-                        <FileSpreadsheet size={12} style={{ marginRight: '4px' }} /> Export CSV
-                      </button>
-                      <button
-                        className="btn-transport btn-cyan"
-                        style={{ padding: '4px 8px', height: '24px', fontSize: '0.68rem' }}
-                        onClick={handleExportCombinedJSON}
-                        title="Export Combined Technical Metadata for All Sessions as JSON"
-                      >
-                        <FileCode size={12} style={{ marginRight: '4px' }} /> Meta (JSON)
-                      </button>
-                      <button
-                        className="btn-transport"
-                        style={{ padding: '4px 8px', height: '24px', fontSize: '0.68rem' }}
-                        onClick={handleExportCombinedTXT}
-                        title="Export Aggregated Text Report for All Sessions"
-                      >
-                        <Download size={12} style={{ marginRight: '4px' }} /> Report (.TXT)
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* Search & Filter Bar */}
-              {sessions.length > 0 && (
-                <div style={{ display: 'flex', gap: '8px', padding: '8px 12px', background: 'var(--bg-darker)', borderBottom: '1px solid var(--border-dim)', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1, background: '#090d14', borderRadius: '4px', padding: '0 8px', border: '1px solid var(--border-dim)' }}>
-                    <Search size={13} color="var(--text-muted)" />
-                    <input
-                      className="daw-input"
-                      style={{ border: 'none', background: 'transparent', padding: '4px 0', fontSize: '0.75rem', height: '28px' }}
-                      placeholder="Filter sessions by title, host, guest or email..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                    />
-                  </div>
-                  <select
-                    className="daw-select"
-                    style={{ width: '130px', height: '28px', fontSize: '0.72rem', padding: '2px 6px' }}
-                    value={filterFormat}
-                    onChange={(e) => setFilterFormat(e.target.value)}
-                  >
-                    <option value="all">All Formats</option>
-                    <option value="wav">WAV Formats</option>
-                    <option value="float">32-Bit Float</option>
-                  </select>
-                </div>
-              )}
-
-              <div className="admin-table-wrap">
-                {sessions.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                    No recorded podcast sessions logged yet. When Hosts record and stop in the Studio, their durations will be logged here automatically.
-                  </div>
-                ) : (
-                  <table className="admin-table">
-                    <thead>
-                      <tr>
-                        <th>PREVIEW</th>
-                        <th>SESSION TITLE</th>
-                        <th>HOST SPEAKER</th>
-                        <th>GUEST SPEAKER</th>
-                        <th>DURATION</th>
-                        <th>GOOGLE DRIVE</th>
-                        <th>DATE RECORDED</th>
-                        <th>FORMAT</th>
-                        <th>METADATA & EXPORT</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sessions
-                        .filter((s) => {
-                          const q = (searchQuery || '').toLowerCase();
-                          const matchesQuery =
-                            !q ||
-                            (s.title || '').toLowerCase().includes(q) ||
-                            (s.hostName || '').toLowerCase().includes(q) ||
-                            (s.guestName || '').toLowerCase().includes(q) ||
-                            (s.hostEmail || '').toLowerCase().includes(q);
-                          const matchesFormat = filterFormat === 'all' || (s.format || '').toLowerCase().includes(filterFormat.toLowerCase());
-                          return matchesQuery && matchesFormat;
-                        })
-                        .map((s) => (
-                          <tr key={s.id}>
-                            <td>
-                              <button
-                                className={`btn-transport ${previewingSessionId === s.id ? 'btn-cyan' : ''}`}
-                                style={{ padding: '4px 6px', height: '24px', fontSize: '0.65rem' }}
-                                onClick={() => handleTogglePreviewAudio(s)}
-                                title={previewingSessionId === s.id ? 'Pause Audition' : 'Audition / Preview Session Audio'}
-                              >
-                                {previewingSessionId === s.id ? <Pause size={12} /> : <Play size={12} />}
-                              </button>
-                            </td>
-                            <td style={{ fontWeight: 600 }}>
-                              <div>{s.title}</div>
-                              {driveUploadMessage?.id === s.id && (
-                                <div style={{ fontSize: '0.68rem', marginTop: '2px', color: driveUploadMessage.success ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                                  {driveUploadMessage.text}{' '}
-                                  {driveUploadMessage.url && (
-                                    <a href={driveUploadMessage.url} target="_blank" rel="noreferrer" style={{ textDecoration: 'underline', color: 'var(--accent-green)' }}>
-                                      Open Drive File ↗
-                                    </a>
-                                  )}
-                                </div>
-                              )}
-                            </td>
-                            <td>{s.hostName}</td>
-                            <td style={{ color: 'var(--accent-amber)' }}>{s.guestName}</td>
-                            <td style={{ minWidth: '110px' }}>
-                              <div style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '5px',
-                                fontFamily: 'var(--font-mono)',
-                                color: 'var(--accent-cyan)',
-                                fontWeight: 700,
-                                background: 'rgba(0, 240, 255, 0.08)',
-                                border: '1px solid rgba(0, 240, 255, 0.25)',
-                                padding: '3px 8px',
-                                borderRadius: '6px',
-                                fontSize: '0.75rem',
-                              }}>
-                                <Clock size={12} color="var(--accent-cyan)" />
-                                <span>{formatDuration(s.durationSeconds)}</span>
-                              </div>
-                            </td>
-                            <td>
-                              {uploadingSessionId === s.id ? (
-                                <div style={{ minWidth: '130px' }}>
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.68rem', color: 'var(--accent-cyan)' }}>
-                                    <Loader2 size={11} className="animate-spin" />
-                                    <span>Uploading to Drive: {uploadProgressMap[s.id]?.progress || 0}%</span>
-                                  </div>
-                                  <div style={{ width: '100%', height: '5px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', marginTop: '3px' }}>
-                                    <div style={{ width: `${uploadProgressMap[s.id]?.progress || 0}%`, height: '100%', background: 'var(--accent-cyan)', borderRadius: '3px', transition: 'width 0.3s' }} />
-                                  </div>
-                                </div>
-                              ) : s.driveFileUrl ? (
-                                <span
-                                  style={{
-                                    padding: '4px 10px',
-                                    fontSize: '0.72rem',
-                                    fontWeight: 600,
-                                    background: 'rgba(0, 255, 135, 0.12)',
-                                    color: 'var(--accent-green)',
-                                    border: '1px solid rgba(0, 255, 135, 0.3)',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '5px',
-                                    borderRadius: '6px',
-                                  }}
-                                  title="Audio successfully uploaded to Google Drive"
-                                >
-                                  <CheckCircle size={13} /> Uploaded to Drive
-                                </span>
-                              ) : (
-                                <button
-                                  className="btn-transport"
-                                  style={{
-                                    padding: '4px 10px',
-                                    height: 'auto',
-                                    fontSize: '0.72rem',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '5px',
-                                    borderColor: 'rgba(255, 183, 0, 0.35)',
-                                    color: 'var(--accent-amber)',
-                                    background: 'rgba(255, 183, 0, 0.08)',
-                                  }}
-                                  onClick={() => handleUploadSessionToDrive(s)}
-                                  title="Upload this session audio to Google Drive folder"
-                                >
-                                  <CloudUpload size={13} /> Upload to Drive
-                                </button>
-                              )}
-                            </td>
-                            <td style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                              {new Date(s.createdAt).toLocaleString()}
-                            </td>
-                            <td style={{ fontSize: '0.7rem' }}>
-                              <span className="daw-badge" style={{ display: 'inline-block' }}>{s.format}</span>
-                              {s.fileSizeMb ? (
-                                <span style={{ marginLeft: '6px', color: 'var(--text-muted)', fontSize: '0.68rem', fontFamily: 'var(--font-mono)' }}>
-                                  ({s.fileSizeMb} MB)
-                                </span>
-                              ) : null}
-                            </td>
-                            <td>
-                              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                                <button
-                                  className="btn-transport"
-                                  style={{ padding: '4px 8px', height: 'auto', fontSize: '0.7rem' }}
-                                  onClick={() => setSelectedSessionForMetadata(s)}
-                                  title="Inspect Full Technical Audio Metadata"
-                                >
-                                  <FileCode size={12} style={{ marginRight: '4px' }} /> Meta
-                                </button>
-                                <button
-                                  className="btn-transport btn-cyan"
-                                  style={{ padding: '4px 8px', height: 'auto', fontSize: '0.7rem' }}
-                                  onClick={() => handleAdminExportSession(s)}
-                                  title="Export Host Session Audio File (Admin Exclusive)"
-                                >
-                                  <Download size={12} style={{ marginRight: '4px' }} /> Export WAV
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Right Column: Google Drive Cloud Sync & Create Host Account */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {/* Google Drive Cloud Storage Settings */}
-            <div className="card-panel" style={{ border: '1px solid rgba(0, 255, 135, 0.25)' }}>
-              <div className="card-header" style={{ justifyContent: 'space-between' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <FolderSync size={16} color="var(--accent-green)" />
-                  <span style={{ color: 'var(--accent-green)' }}>GOOGLE DRIVE STORAGE SYNC</span>
-                </div>
-                <button
-                  className="btn-transport"
-                  style={{ padding: '2px 6px', height: '22px', fontSize: '0.68rem' }}
-                  onClick={() => setShowScriptGuideModal(true)}
-                  title="How to connect Google Drive without API keys in 1 minute"
-                >
-                  <HelpCircle size={11} style={{ marginRight: '3px' }} /> Setup Guide
-                </button>
-              </div>
-
-              <form onSubmit={handleSaveDriveSettings} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <p style={{ fontSize: '0.73rem', color: 'var(--text-secondary)', marginBottom: '2px' }}>
-                  Automatically save all recorded audio WAV files directly to your Google Drive folder via free Google Apps Script.
-                </p>
-
-                {driveSaveSuccess && (
-                  <div className="login-success" style={{ margin: '2px 0', padding: '6px 8px' }}>
-                    <CheckCircle size={13} /> <span>Google Drive settings saved!</span>
-                  </div>
-                )}
-
-                <div className="login-field">
-                  <label style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>APPS SCRIPT WEBHOOK URL</span>
-                    {driveWebhookUrl && <span style={{ color: 'var(--accent-green)', fontSize: '0.65rem' }}>● CONFIGURED</span>}
-                  </label>
-                  <input
-                    className="daw-input"
-                    value={driveWebhookUrl}
-                    onChange={(e) => setDriveWebhookUrl(e.target.value)}
-                    placeholder="https://script.google.com/macros/s/.../exec"
-                    style={{ fontSize: '0.72rem' }}
-                  />
-                </div>
-
-                <div className="login-field">
-                  <label>GOOGLE DRIVE FOLDER LINK (OPTIONAL)</label>
-                  <input
-                    className="daw-input"
-                    value={driveFolderUrl}
-                    onChange={(e) => setDriveFolderUrl(e.target.value)}
-                    placeholder="https://drive.google.com/drive/folders/..."
-                    style={{ fontSize: '0.72rem', width: '100%' }}
-                  />
-                </div>
-
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.74rem', color: 'var(--text-primary)', cursor: 'pointer', margin: '4px 0' }}>
-                  <input
-                    type="checkbox"
-                    checked={autoUploadDrive}
-                    onChange={(e) => setAutoUploadDriveState(e.target.checked)}
-                    style={{ accentColor: 'var(--accent-green)' }}
-                  />
-                  <span>Auto-upload audio to Google Drive when session stops</span>
-                </label>
-
-                <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
-                  <button type="submit" className="btn-transport btn-cyan" style={{ flex: 1 }}>
-                    <CloudUpload size={13} /> Save Drive Settings
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-transport"
-                    onClick={() => setShowScriptGuideModal(true)}
-                    title="Get Google Apps Script Code"
-                  >
-                    <FileCode size={13} /> Code
-                  </button>
-                </div>
-              </form>
-            </div>
-
-            {/* Create Host Account Card */}
+            {/* Create New Host Account Form */}
             <div className="card-panel">
               <div className="card-header">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -957,7 +1135,7 @@ export const AdminPanel: React.FC = () => {
 
               <form onSubmit={handleCreateHost} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>
-                  Admin creates Host accounts. Hosts log in to access the dual-channel Podcast Recording DAW Studio and invite Guest speakers.
+                  Admin generates credentials for Hosts. Hosts log in to run dual-channel podcast recording sessions and invite guests.
                 </p>
 
                 {addError && (
@@ -1003,14 +1181,247 @@ export const AdminPanel: React.FC = () => {
                   />
                 </div>
 
-                <button type="submit" className="btn-transport btn-cyan" style={{ width: '100%', marginTop: '6px' }}>
+                <button type="submit" className="creator-record-btn btn-rec-start" style={{ width: '100%', marginTop: '6px', justifyContent: 'center' }}>
                   <UserPlus size={14} /> Create Host Account
                 </button>
               </form>
             </div>
           </div>
-        </section>
+        )}
+
+        {/* TAB 4: GOOGLE DRIVE CLOUD STORAGE */}
+        {activeTab === 'cloud' && (
+          <div style={{ maxWidth: '700px', margin: '0 auto', width: '100%' }}>
+            <div className="card-panel" style={{ border: '1px solid rgba(0, 255, 135, 0.25)' }}>
+              <div className="card-header" style={{ justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <FolderSync size={16} color="var(--accent-green)" />
+                  <span style={{ color: 'var(--accent-green)' }}>GOOGLE DRIVE STORAGE INTEGRATION</span>
+                </div>
+                <button
+                  className="creator-quick-btn"
+                  onClick={() => setShowScriptGuideModal(true)}
+                  title="How to connect Google Drive without API keys in 1 minute"
+                >
+                  <HelpCircle size={12} /> 1-Minute Setup Guide
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveDriveSettings} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                  Automatically save all recorded podcast WAV files directly to your personal or organization Google Drive folder using a free Google Apps Script webhook.
+                </p>
+
+                {driveSaveSuccess && (
+                  <div className="login-success" style={{ margin: '2px 0', padding: '6px 8px' }}>
+                    <CheckCircle size={13} /> <span>Google Drive settings saved!</span>
+                  </div>
+                )}
+
+                <div className="login-field">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <label style={{ margin: 0 }}>APPS SCRIPT WEBHOOK URL</label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      {driveWebhookUrl && <span style={{ color: 'var(--accent-green)', fontSize: '0.65rem' }}>● CONFIGURED</span>}
+                      <button
+                        type="button"
+                        className="creator-quick-btn active-cyan"
+                        onClick={handleTestDriveConnection}
+                        disabled={testingDriveConnection}
+                        style={{ height: '22px', fontSize: '0.68rem', padding: '0 8px' }}
+                      >
+                        {testingDriveConnection ? <><Loader2 size={11} className="animate-spin" /> Testing...</> : <><Zap size={11} /> Test Connection</>}
+                      </button>
+                    </div>
+                  </div>
+                  <input
+                    className="daw-input"
+                    value={driveWebhookUrl}
+                    onChange={(e) => setDriveWebhookUrl(e.target.value)}
+                    placeholder="https://script.google.com/macros/s/.../exec"
+                  />
+                </div>
+
+                {/* Test Connection Result Box */}
+                {testDriveResult && (
+                  <div style={{
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    fontSize: '0.72rem',
+                    background: testDriveResult.success ? 'rgba(0, 255, 135, 0.1)' : 'rgba(255, 42, 95, 0.1)',
+                    border: `1px solid ${testDriveResult.success ? 'rgba(0, 255, 135, 0.3)' : 'rgba(255, 42, 95, 0.3)'}`,
+                    color: testDriveResult.success ? 'var(--accent-green)' : 'var(--accent-red)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                  }}>
+                    {testDriveResult.success ? <CheckCircle size={13} /> : <AlertCircle size={13} />}
+                    <span>{testDriveResult.message}</span>
+                  </div>
+                )}
+
+                <div className="login-field">
+                  <label>GOOGLE DRIVE FOLDER LINK (OPTIONAL)</label>
+                  <input
+                    className="daw-input"
+                    value={driveFolderUrl}
+                    onChange={(e) => setDriveFolderUrl(e.target.value)}
+                    placeholder="https://drive.google.com/drive/folders/..."
+                  />
+                </div>
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.75rem', color: 'var(--text-primary)', cursor: 'pointer', margin: '4px 0' }}>
+                  <input
+                    type="checkbox"
+                    checked={autoUploadDrive}
+                    onChange={(e) => setAutoUploadDriveState(e.target.checked)}
+                    style={{ accentColor: 'var(--accent-green)' }}
+                  />
+                  <span>Auto-upload audio to Google Drive when any Host completes recording</span>
+                </label>
+
+                <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                  <button type="submit" className="creator-quick-btn active-cyan" style={{ flex: 1, height: '34px', justifyContent: 'center' }}>
+                    <CloudUpload size={14} /> Save Cloud Settings
+                  </button>
+                  <button
+                    type="button"
+                    className="creator-quick-btn"
+                    onClick={() => setShowScriptGuideModal(true)}
+                    title="Get Google Apps Script Code"
+                    style={{ height: '34px' }}
+                  >
+                    <FileCode size={14} /> Copy Apps Script Code
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </main>
+
+      {/* Floating Audio Audition Player Dock (When previewing any session) */}
+      {previewingSession && (
+        <div className="floating-audition-dock">
+          {/* Left: Play/Pause and Title */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <button
+              className="creator-quick-btn active-cyan"
+              style={{ width: '36px', height: '36px', borderRadius: '50%', padding: 0, justifyContent: 'center' }}
+              onClick={() => handleTogglePreviewAudio(previewingSession)}
+            >
+              {auditionIsPlaying ? <Pause size={16} /> : <Play size={16} />}
+            </button>
+            <div className="audition-track-info">
+              <div className="audition-track-title">{previewingSession.title}</div>
+              <div className="audition-track-sub">
+                {previewingSession.hostName} & {previewingSession.guestName}
+              </div>
+            </div>
+          </div>
+
+          {/* Center: Waveform Scrubber & Timecode */}
+          <div className="audition-scrub-section">
+            <div className="audition-timecode">
+              {formatDuration(Math.floor(auditionCurrentTime))} / {formatDuration(Math.floor(auditionDuration))}
+            </div>
+            <input
+              type="range"
+              className="audition-scrubber-slider"
+              min={0}
+              max={auditionDuration || 1}
+              step={0.1}
+              value={auditionCurrentTime}
+              onChange={(e) => handleAuditionSeek(parseFloat(e.target.value))}
+            />
+          </div>
+
+          {/* Right: Playback Speed & Close */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <select
+              className="daw-select"
+              style={{ width: '70px', height: '28px', fontSize: '0.72rem', padding: '2px 4px' }}
+              value={auditionSpeed}
+              onChange={(e) => handleAuditionSpeedChange(parseFloat(e.target.value))}
+            >
+              <option value="1.0">1.0x</option>
+              <option value="1.25">1.25x</option>
+              <option value="1.5">1.5x</option>
+              <option value="2.0">2.0x</option>
+            </select>
+
+            <button
+              className="creator-quick-btn"
+              onClick={handleCloseAudition}
+              title="Close Audition Player"
+              style={{ padding: '4px' }}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Host & Password Reset Modal */}
+      {editingUser && (
+        <div className="modal-overlay" onClick={() => setEditingUser(null)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '440px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px', borderBottom: '1px solid var(--border-dim)', paddingBottom: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Key size={18} color="var(--accent-cyan)" />
+                <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>EDIT HOST / RESET PASSWORD</h3>
+              </div>
+              <button onClick={() => setEditingUser(null)} className="btn-icon" style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditUser} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                Account Email: <strong style={{ color: 'var(--accent-cyan)' }}>{editingUser.email}</strong>
+              </div>
+
+              {editUserMsg && (
+                <div className={editUserMsg.type === 'success' ? 'login-success' : 'login-error'} style={{ margin: '4px 0' }}>
+                  {editUserMsg.type === 'success' ? <CheckCircle size={14} /> : <AlertCircle size={14} />}
+                  <span>{editUserMsg.text}</span>
+                </div>
+              )}
+
+              <div className="login-field">
+                <label>HOST DISPLAY NAME</label>
+                <input
+                  className="daw-input"
+                  value={editUserName}
+                  onChange={(e) => setEditUserName(e.target.value)}
+                  placeholder="Host Name"
+                  required
+                />
+              </div>
+
+              <div className="login-field">
+                <label>NEW PASSWORD (LEAVE BLANK TO KEEP CURRENT)</label>
+                <input
+                  className="daw-input"
+                  type="password"
+                  value={editUserPassword}
+                  onChange={(e) => setEditUserPassword(e.target.value)}
+                  placeholder="Enter new password"
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '12px' }}>
+                <button type="button" className="creator-quick-btn" onClick={() => setEditingUser(null)}>
+                  Cancel
+                </button>
+                <button type="submit" className="creator-quick-btn active-cyan">
+                  Save Changes
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Google Apps Script 1-Minute Setup Guide Modal */}
       {showScriptGuideModal && (
@@ -1021,27 +1432,27 @@ export const AdminPanel: React.FC = () => {
                 <FolderSync color="var(--accent-green)" size={20} />
                 <h3 style={{ fontSize: '1.05rem', fontWeight: 700 }}>GOOGLE DRIVE AUDIO UPLOAD SETUP (NO API KEY NEEDED)</h3>
               </div>
-              <button onClick={() => setShowScriptGuideModal(false)} className="btn-icon" style={{ background: 'none', border: 'none', color: 'var(--text-secondary)' }}>
+              <button onClick={() => setShowScriptGuideModal(false)} className="btn-icon" style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
                 ✕
               </button>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
               <div>
-                <strong style={{ color: '#fff' }}>Step 1:</strong> Open your Google Drive folder and copy the <code style={{ color: 'var(--accent-cyan)' }}>FOLDER_ID</code> from the browser URL (the characters after <code style={{ color: 'var(--accent-cyan)' }}>/folders/</code>).
+                <strong style={{ color: 'var(--text-primary)' }}>Step 1:</strong> Open your Google Drive folder and copy the <code style={{ color: 'var(--accent-cyan)' }}>FOLDER_ID</code> from the browser URL (the characters after <code style={{ color: 'var(--accent-cyan)' }}>/folders/</code>).
               </div>
               <div>
-                <strong style={{ color: '#fff' }}>Step 2:</strong> Go to <a href="https://script.google.com/" target="_blank" rel="noreferrer" style={{ color: 'var(--accent-green)', textDecoration: 'underline' }}>script.google.com</a> and click <strong>New project</strong>.
+                <strong style={{ color: 'var(--text-primary)' }}>Step 2:</strong> Go to <a href="https://script.google.com/" target="_blank" rel="noreferrer" style={{ color: 'var(--accent-green)', textDecoration: 'underline' }}>script.google.com</a> and click <strong>New project</strong>.
               </div>
               <div>
-                <strong style={{ color: '#fff' }}>Step 3:</strong> Replace all code in the editor with the script below and replace <code style={{ color: 'var(--accent-cyan)' }}>YOUR_GOOGLE_DRIVE_FOLDER_ID_HERE</code> with your Folder ID.
+                <strong style={{ color: 'var(--text-primary)' }}>Step 3:</strong> Replace all code in the editor with the script below and replace <code style={{ color: 'var(--accent-cyan)' }}>YOUR_GOOGLE_DRIVE_FOLDER_ID_HERE</code> with your Folder ID.
               </div>
 
               <div style={{ position: 'relative', background: 'var(--bg-darker)', border: '1px solid var(--border-dim)', borderRadius: '6px', padding: '12px' }}>
                 <button
-                  className="btn-transport btn-cyan"
+                  className="creator-quick-btn active-cyan"
                   onClick={handleCopyAppsScript}
-                  style={{ position: 'absolute', top: '8px', right: '8px', padding: '4px 10px', height: '26px', fontSize: '0.72rem' }}
+                  style={{ position: 'absolute', top: '8px', right: '8px' }}
                 >
                   {copiedScript ? <><Check size={12} /> Copied!</> : <><Copy size={12} /> Copy Script Code</>}
                 </button>
@@ -1051,15 +1462,15 @@ export const AdminPanel: React.FC = () => {
               </div>
 
               <div>
-                <strong style={{ color: '#fff' }}>Step 4:</strong> Click <strong>Deploy</strong> → <strong>New deployment</strong> → Type: <strong>Web app</strong> → Execute as: <strong>Me</strong> → Who has access: <strong>Anyone</strong> → Click <strong>Deploy</strong>.
+                <strong style={{ color: 'var(--text-primary)' }}>Step 4:</strong> Click <strong>Deploy</strong> → <strong>New deployment</strong> → Type: <strong>Web app</strong> → Execute as: <strong>Me</strong> → Who has access: <strong>Anyone</strong> → Click <strong>Deploy</strong>.
               </div>
               <div>
-                <strong style={{ color: '#fff' }}>Step 5:</strong> Copy the generated <strong>Web app URL</strong> and paste it into the <strong>APPS SCRIPT WEBHOOK URL</strong> input field!
+                <strong style={{ color: 'var(--text-primary)' }}>Step 5:</strong> Copy the generated <strong>Web app URL</strong> and paste it into the <strong>APPS SCRIPT WEBHOOK URL</strong> input field!
               </div>
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px' }}>
-              <button className="btn-transport btn-cyan" onClick={() => setShowScriptGuideModal(false)}>
+              <button className="creator-quick-btn active-cyan" onClick={() => setShowScriptGuideModal(false)}>
                 Done
               </button>
             </div>
@@ -1089,7 +1500,6 @@ export const AdminPanel: React.FC = () => {
       {/* Hidden Audio Element for Auditioning Session Audio */}
       <audio
         ref={previewAudioRef}
-        onEnded={() => setPreviewingSessionId(null)}
         style={{ display: 'none' }}
       />
 

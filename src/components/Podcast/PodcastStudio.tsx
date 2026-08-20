@@ -11,15 +11,13 @@ import {
   Activity,
   UserPlus,
   Lock,
-  MessageSquare,
   AlertTriangle,
-  AlertCircle,
   RotateCcw,
   Cloud,
   CloudUpload,
-  CheckCircle,
   Loader2,
   X,
+  Clock,
 } from 'lucide-react';
 import { useAuth } from '../../auth/AuthContext';
 import { saveRecordingSession, updateSessionDriveStatus } from '../../auth/SessionStore';
@@ -165,6 +163,10 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
   const [showTranscriptModal, setShowTranscriptModal] = useState(false);
   const [currentLanguage, setCurrentLanguage] = useState('en-US');
   const [recoveryData, setRecoveryData] = useState<BackupSessionData | null>(null);
+
+  // Modern Creator Suite Split Workspace & Playhead Sync
+  const [seekTargetTime, setSeekTargetTime] = useState<number | undefined>(undefined);
+  const [activeRightTab, setActiveRightTab] = useState<'soundboard' | 'markers'>('soundboard');
 
   const sttEngine = useRef<SpeechToTextEngine | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -936,307 +938,115 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         </div>
       </header>
 
-      {/* Main Studio Console */}
-      <main className="podcast-main">
-        {/* Prominent Remote Guest Live Connection Status Bar */}
-        <div style={{
-          background: webrtcStatus.connected ? 'rgba(0, 255, 135, 0.08)' : 'rgba(255, 183, 0, 0.08)',
-          border: `1px solid ${webrtcStatus.connected ? 'rgba(0, 255, 135, 0.35)' : 'rgba(255, 183, 0, 0.35)'}`,
-          borderRadius: '8px',
-          padding: '8px 16px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          fontSize: '0.8rem',
-          fontWeight: 600,
-          color: webrtcStatus.connected ? 'var(--accent-green)' : 'var(--accent-amber)',
-          boxShadow: webrtcStatus.connected ? '0 0 15px rgba(0, 255, 135, 0.15)' : 'none'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span style={{
-              width: '10px',
-              height: '10px',
-              borderRadius: '50%',
-              background: webrtcStatus.connected ? 'var(--accent-green)' : 'var(--accent-amber)',
-              boxShadow: webrtcStatus.connected ? '0 0 10px var(--accent-green)' : '0 0 10px var(--accent-amber)',
-              display: 'inline-block'
-            }} />
-            <span>
-              {webrtcStatus.connected
-                ? `GUEST CONNECTED LIVE — ${guestDisplayName.toUpperCase()} (P2P WEBRTC CALL ACTIVE)`
-                : 'GUEST DISCONNECTED — WAITING FOR GUEST SPEAKER TO JOIN SESSION'}
-            </span>
-          </div>
-
-          {!webrtcStatus.connected && (
+      {/* Main Studio Console — Option 2: Modern Creator Suite */}
+      <main className="podcast-main" style={{ padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        
+        {/* 1. Floating / Top Creator Transport Island */}
+        <div className="creator-transport-island">
+          {/* Left: Recording Triggers & Timer */}
+          <div className="creator-transport-left">
             <button
-              className="btn-transport btn-cyan"
-              onClick={() => setShowInviteModal(true)}
-              style={{ padding: '2px 12px', height: '28px', fontSize: '0.72rem' }}
-            >
-              <UserPlus size={13} /> Invite Guest Speaker
-            </button>
-          )}
-        </div>
-
-        {/* Google Drive Live Upload Progress & Status Banner */}
-        {driveUpload && (
-          <div style={{
-            background: driveUpload.error ? 'rgba(255, 42, 95, 0.12)' : driveUpload.progress === 100 ? 'rgba(0, 255, 135, 0.12)' : 'rgba(0, 240, 255, 0.12)',
-            border: `1px solid ${driveUpload.error ? 'rgba(255, 42, 95, 0.5)' : driveUpload.progress === 100 ? 'rgba(0, 255, 135, 0.5)' : 'rgba(0, 240, 255, 0.5)'}`,
-            borderRadius: '8px',
-            padding: '10px 16px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '12px',
-            fontSize: '0.82rem',
-            fontWeight: 600,
-            color: driveUpload.error ? 'var(--accent-red)' : driveUpload.progress === 100 ? 'var(--accent-green)' : 'var(--accent-cyan)',
-            boxShadow: driveUpload.progress === 100 ? '0 0 15px rgba(0, 255, 135, 0.2)' : '0 0 15px rgba(0, 240, 255, 0.2)',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1 }}>
-              {driveUpload.isUploading ? (
-                <Loader2 size={18} className="animate-spin" />
-              ) : driveUpload.progress === 100 ? (
-                <CheckCircle size={18} color="var(--accent-green)" />
-              ) : (
-                <AlertCircle size={18} color="var(--accent-red)" />
-              )}
-              <div style={{ flex: 1 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span>{driveUpload.stageText}</span>
-                  {driveUpload.isUploading && <span>{driveUpload.progress}%</span>}
-                </div>
-                {driveUpload.isUploading && (
-                  <div style={{ width: '100%', height: '5px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', marginTop: '6px', overflow: 'hidden' }}>
-                    <div style={{ width: `${driveUpload.progress}%`, height: '100%', background: 'var(--accent-cyan)', transition: 'width 0.3s ease' }} />
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <button
-              onClick={() => setDriveUpload(null)}
-              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '2px' }}
-              title="Dismiss"
-            >
-              <X size={16} />
-            </button>
-          </div>
-        )}
-
-        {/* Dual-Channel Speaker Consoles (Host & Guest side-by-side) */}
-        <section className="podcast-speakers" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-          {/* Speaker A (Host) */}
-          <SpeakerPanel
-            label="SPEAKER A (HOST)"
-            role="host"
-            color="cyan"
-            devices={devices}
-            selectedDeviceId={deviceA}
-            onDeviceChange={handleDeviceChangeA}
-            isMuted={isMutedA}
-            onToggleMute={handleMuteA}
-            gain={gainA}
-            onGainChange={handleGainChangeA}
-            isSolo={soloA}
-            onToggleSolo={handleSoloA}
-            analysisData={analysisA}
-            isRecording={isRecording}
-            isConnected={isConnectedA}
-            userName={hostDisplayName}
-            onOpenFx={() => {
-              setActiveFxEngine(engineA.current);
-              setActiveFxLabel('Speaker A (Host)');
-            }}
-            isNoiseSuppressed={isNoiseA}
-            onToggleNoiseSuppression={handleToggleNoiseA}
-            vocalPreset={vocalPresetA}
-            onPresetChange={handlePresetChangeA}
-          />
-
-          {/* Speaker B (Guest) */}
-          <SpeakerPanel
-            label="SPEAKER B (GUEST)"
-            role="guest"
-            color="amber"
-            devices={[]}
-            selectedDeviceId=""
-            onDeviceChange={() => {}}
-            isMuted={isMutedB}
-            onToggleMute={handleMuteB}
-            gain={gainB}
-            onGainChange={handleGainChangeB}
-            isSolo={soloB}
-            onToggleSolo={handleSoloB}
-            analysisData={analysisB}
-            isRecording={isRecording}
-            isConnected={isConnectedB || webrtcStatus.connected}
-            userName={guestDisplayName}
-            onOpenFx={() => {
-              setActiveFxEngine(engineB.current);
-              setActiveFxLabel('Speaker B (Guest)');
-            }}
-            isNoiseSuppressed={isNoiseB}
-            onToggleNoiseSuppression={handleToggleNoiseB}
-            vocalPreset={vocalPresetB}
-            onPresetChange={handlePresetChangeB}
-          />
-        </section>
-
-        {/* Studio Soundboard SFX Trigger Bar */}
-        <SoundboardPanel audioContext={engineA.current?.audioContext || null} />
-
-        {/* Google Drive Cloud Sync & Upload Bar */}
-        {hasAudio && (
-          <div
-            style={{
-              background: 'linear-gradient(135deg, rgba(0, 240, 255, 0.08), rgba(9, 13, 22, 0.95))',
-              border: '1px solid rgba(0, 240, 255, 0.25)',
-              borderRadius: '8px',
-              padding: '10px 16px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '12px',
-              flexWrap: 'wrap',
-              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <CloudUpload size={18} color={isWebhookConfigured ? 'var(--accent-green)' : 'var(--accent-amber)'} />
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.5px' }}>
-                    GOOGLE DRIVE CLOUD STORAGE SYNC
-                  </span>
-                  <span
-                    style={{
-                      fontSize: '0.65rem',
-                      fontFamily: 'var(--font-mono)',
-                      fontWeight: 700,
-                      padding: '1px 6px',
-                      borderRadius: '4px',
-                      background: isWebhookConfigured ? 'rgba(0, 255, 135, 0.15)' : 'rgba(255, 183, 0, 0.15)',
-                      color: isWebhookConfigured ? 'var(--accent-green)' : 'var(--accent-amber)',
-                      border: isWebhookConfigured ? '1px solid rgba(0, 255, 135, 0.3)' : '1px solid rgba(255, 183, 0, 0.3)',
-                    }}
-                  >
-                    {isWebhookConfigured ? '• CONFIGURED' : '• NOT CONFIGURED'}
-                  </span>
-                </div>
-                <div style={{ fontSize: '0.7rem', color: driveUpload?.isUploading ? 'var(--accent-cyan)' : driveUpload?.progress === 100 ? 'var(--accent-green)' : isWebhookConfigured ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                  {driveUpload?.isUploading
-                    ? driveUpload.stageText
-                    : driveUpload?.progress === 100
-                    ? '✓ Audio uploaded to Google Drive folder'
-                    : isWebhookConfigured
-                    ? '✓ Google Drive Webhook Connected • Auto-sync active'
-                    : 'Google Drive Webhook URL not configured. Click "⚙️ Webhook Setup" to connect.'}
-                </div>
-              </div>
-            </div>
-
-            {driveUpload?.isUploading && (
-              <div style={{ flex: 1, minWidth: '160px', maxWidth: '320px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', color: 'var(--accent-cyan)', marginBottom: '3px' }}>
-                  <span>Uploading to Google Drive...</span>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{driveUpload.progress}%</span>
-                </div>
-                <div style={{ width: '100%', height: '5px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden' }}>
-                  <div style={{ width: `${driveUpload.progress}%`, height: '100%', background: 'var(--accent-cyan)', transition: 'width 0.3s ease' }} />
-                </div>
-              </div>
-            )}
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <button
-                className="btn-transport btn-cyan"
-                onClick={handleManualUploadToDrive}
-                disabled={driveUpload?.isUploading}
-                style={{
-                  padding: '5px 12px',
-                  fontSize: '0.72rem',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '5px',
-                  borderRadius: '6px',
-                }}
-              >
-                {driveUpload?.isUploading ? <Loader2 size={13} className="animate-spin" /> : <CloudUpload size={13} />}
-                {driveUpload?.isUploading ? `Uploading (${driveUpload.progress}%)` : 'Upload to Google Drive'}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Center: Multi-track Waveform Timeline */}
-        <section className="podcast-editor-area">
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <WaveformEditor
-              audioBuffer={audioBuffer}
-              speakerABuffer={bufferA}
-              speakerBBuffer={bufferB}
-              onBufferUpdate={setAudioBuffer}
-              onSpeakerBuffersUpdate={(a, b) => {
-                setBufferA(a);
-                setBufferB(b);
-              }}
-              onAddMarker={handleAddMarker}
-            />
-          </div>
-          <div style={{ width: '260px', flexShrink: 0, minWidth: 0 }}>
-            <MarkerList
-              markers={markers}
-              onDeleteMarker={(id) => setMarkers(markers.filter((m) => m.id !== id))}
-              onJumpToMarker={() => {}}
-            />
-          </div>
-        </section>
-
-        {/* Bottom: Transport Controls */}
-        <section className="transport-section">
-          <div className="transport-btn-group">
-            <button
-              className={`btn-transport btn-rec ${isRecording ? 'recording' : ''}`}
+              type="button"
+              className={`creator-record-btn ${isRecording ? 'btn-rec-active' : 'btn-rec-start'}`}
               onClick={isRecording ? handleStop : handleStartRecord}
             >
               <Mic size={15} />
-              {isRecording ? 'RECORDING LIVE' : 'RECORD PODCAST'}
+              <span>{isRecording ? (isPaused ? 'PAUSED' : 'ON AIR • RECORDING') : 'RECORD PODCAST'}</span>
             </button>
 
+            <div className="creator-timer-badge">
+              <Clock size={15} color="var(--accent-cyan)" />
+              <span>{formatTime(elapsedMs)}</span>
+            </div>
+
             {isRecording && (
-              <button className="btn-transport" onClick={handlePause}>
-                {isPaused ? <Mic size={15} /> : <Pause size={15} />}
-                {isPaused ? 'Resume' : 'Pause'}
+              <button className="creator-quick-btn" onClick={handlePause} title={isPaused ? 'Resume recording' : 'Pause recording'}>
+                {isPaused ? <Mic size={14} color="var(--accent-green)" /> : <Pause size={14} />}
+                <span>{isPaused ? 'Resume' : 'Pause'}</span>
               </button>
             )}
 
             {isRecording && (
-              <button className="btn-transport" onClick={handleStop}>
-                <Square size={15} /> Stop & Save Session
+              <button className="creator-quick-btn" onClick={handleStop} title="Stop and finalize recording session">
+                <Square size={14} color="var(--accent-red)" />
+                <span>Finish & Save</span>
               </button>
             )}
 
             {hasAudio && !isRecording && (
-              <button className="btn-transport" onClick={handleClear}>
-                <Trash2 size={15} /> Clear Session
+              <button className="creator-quick-btn" onClick={handleClear} title="Clear current session buffers">
+                <Trash2 size={14} />
+                <span>Clear</span>
               </button>
             )}
           </div>
 
-          <div className="time-display">{formatTime(elapsedMs)}</div>
+          {/* Center: Live WebRTC Guest Status Pill */}
+          <div className="creator-transport-center">
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '5px 12px',
+                borderRadius: '20px',
+                fontSize: '0.72rem',
+                fontWeight: 600,
+                background: webrtcStatus.connected ? 'rgba(0, 255, 135, 0.12)' : 'rgba(255, 183, 0, 0.12)',
+                border: `1px solid ${webrtcStatus.connected ? 'rgba(0, 255, 135, 0.35)' : 'rgba(255, 183, 0, 0.35)'}`,
+                color: webrtcStatus.connected ? 'var(--accent-green)' : 'var(--accent-amber)',
+              }}
+            >
+              <span
+                style={{
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  background: webrtcStatus.connected ? 'var(--accent-green)' : 'var(--accent-amber)',
+                  boxShadow: webrtcStatus.connected ? '0 0 8px var(--accent-green)' : '0 0 8px var(--accent-amber)',
+                }}
+              />
+              <span>
+                {webrtcStatus.connected
+                  ? `Guest Live: ${guestDisplayName} (P2P Call Active)`
+                  : 'Guest Standby: Waiting to Join'}
+              </span>
+            </div>
 
-          <div className="transport-btn-group">
-            <button className="btn-transport" onClick={() => setShowTranscriptModal(true)}>
-              <MessageSquare size={15} /> Live Transcripts ({transcriptItems.length})
+            {!webrtcStatus.connected && (
+              <button
+                className="creator-quick-btn active-cyan"
+                onClick={() => setShowInviteModal(true)}
+              >
+                <UserPlus size={12} /> Invite Guest
+              </button>
+            )}
+          </div>
+
+          {/* Right: Cloud Sync, Shortcuts & Master Export */}
+          <div className="creator-transport-right">
+            {hasAudio && (
+              <button
+                className={`creator-quick-btn ${isWebhookConfigured ? 'active-cyan' : ''}`}
+                onClick={handleManualUploadToDrive}
+                disabled={driveUpload?.isUploading}
+                title="Sync recorded session to Google Drive"
+              >
+                {driveUpload?.isUploading ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <CloudUpload size={13} color={isWebhookConfigured ? 'var(--accent-green)' : 'var(--text-muted)'} />
+                )}
+                <span>{driveUpload?.isUploading ? `${driveUpload.progress}%` : 'Drive Sync'}</span>
+              </button>
+            )}
+
+            <button className="creator-quick-btn" onClick={() => setShowHelp(true)} title="Keyboard Shortcuts">
+              <HelpCircle size={13} /> Shortcuts
             </button>
-            <button className="btn-transport" onClick={() => setShowHelp(true)}>
-              <HelpCircle size={15} /> Shortcuts
-            </button>
+
             <button
-              className={`btn-transport ${isAdmin ? 'btn-cyan' : ''}`}
+              className={`creator-quick-btn ${isAdmin ? 'active-cyan' : ''}`}
               onClick={() => {
                 if (!isAdmin) {
                   alert('🔒 EXPORT RESTRICTED: Only System Administrators have permission to export or download recorded audio files. Please contact your Admin to obtain exported WAV files.');
@@ -1245,15 +1055,155 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
                 setShowExport(true);
               }}
               disabled={!hasAudio || isRecording}
-              title={!isAdmin ? 'Audio export is restricted to Admin only' : 'Export Podcast Audio'}
+              title={!isAdmin ? 'Audio export is restricted to Admin only' : 'Export Master WAV & Stems'}
               style={{ opacity: !isAdmin ? 0.7 : 1 }}
             >
-              {isAdmin ? <Download size={15} /> : <Lock size={15} color="var(--accent-amber)" />}
-              {isAdmin ? 'Export Podcast' : 'Export (Admin Only)'}
+              {isAdmin ? <Download size={13} /> : <Lock size={13} color="var(--accent-amber)" />}
+              <span>{isAdmin ? 'Export Master' : 'Export (Admin)'}</span>
             </button>
           </div>
+        </div>
+
+        {/* 2. Top Half: Live Broadcast Stage / Speaker Cards */}
+        <section className="creator-stage-section">
+          <div className="creator-stage-grid">
+            {/* Host Speaker Card */}
+            <SpeakerPanel
+              label="SPEAKER A (HOST)"
+              role="host"
+              color="cyan"
+              devices={devices}
+              selectedDeviceId={deviceA}
+              onDeviceChange={handleDeviceChangeA}
+              isMuted={isMutedA}
+              onToggleMute={handleMuteA}
+              gain={gainA}
+              onGainChange={handleGainChangeA}
+              isSolo={soloA}
+              onToggleSolo={handleSoloA}
+              analysisData={analysisA}
+              isRecording={isRecording}
+              isConnected={isConnectedA}
+              userName={hostDisplayName}
+              onOpenFx={() => {
+                setActiveFxEngine(engineA.current);
+                setActiveFxLabel('Speaker A (Host)');
+              }}
+              isNoiseSuppressed={isNoiseA}
+              onToggleNoiseSuppression={handleToggleNoiseA}
+              vocalPreset={vocalPresetA}
+              onPresetChange={handlePresetChangeA}
+            />
+
+            {/* Remote Guest Speaker Card */}
+            <SpeakerPanel
+              label="SPEAKER B (GUEST)"
+              role="guest"
+              color="amber"
+              devices={[]}
+              selectedDeviceId=""
+              onDeviceChange={() => {}}
+              isMuted={isMutedB}
+              onToggleMute={handleMuteB}
+              gain={gainB}
+              onGainChange={handleGainChangeB}
+              isSolo={soloB}
+              onToggleSolo={handleSoloB}
+              analysisData={analysisB}
+              isRecording={isRecording}
+              isConnected={isConnectedB || webrtcStatus.connected}
+              userName={guestDisplayName}
+              onOpenFx={() => {
+                setActiveFxEngine(engineB.current);
+                setActiveFxLabel('Speaker B (Guest)');
+              }}
+              isNoiseSuppressed={isNoiseB}
+              onToggleNoiseSuppression={handleToggleNoiseB}
+              vocalPreset={vocalPresetB}
+              onPresetChange={handlePresetChangeB}
+            />
+          </div>
         </section>
+
+        {/* 3. Bottom Half: Split Studio Workspace (50 / 50 Grid) */}
+        <section className="creator-workspace-split">
+          {/* Left Column: Live Synced Transcript & Storyboard */}
+          <div className="creator-workspace-pane">
+            <TranscriptPanel
+              embedded={true}
+              items={transcriptItems}
+              onClear={() => setTranscriptItems([])}
+              currentLanguage={currentLanguage}
+              onLanguageChange={handleLanguageChange}
+              onSeekAudio={(sec) => setSeekTargetTime(sec)}
+            />
+          </div>
+
+          {/* Right Column: Multi-Track Waveform Timeline & Production Tools */}
+          <div className="creator-workspace-pane">
+            <div className="creator-pane-card">
+              {/* Card Header with Production Tools Tabs */}
+              <div className="creator-pane-header">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Radio className="daw-logo-icon" size={18} />
+                  <span style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-primary)' }}>
+                    STUDIO WAVEFORM & PRODUCTION DECK
+                  </span>
+                </div>
+
+                {/* Tab Switcher for Soundboard vs Markers */}
+                <div style={{ display: 'flex', gap: '4px' }}>
+                  <button
+                    type="button"
+                    className={`creator-quick-btn ${activeRightTab === 'soundboard' ? 'active-cyan' : ''}`}
+                    onClick={() => setActiveRightTab('soundboard')}
+                  >
+                    🔊 MPC Soundboard
+                  </button>
+                  <button
+                    type="button"
+                    className={`creator-quick-btn ${activeRightTab === 'markers' ? 'active-cyan' : ''}`}
+                    onClick={() => setActiveRightTab('markers')}
+                  >
+                    📍 Cue Markers ({markers.length})
+                  </button>
+                </div>
+              </div>
+
+              {/* Multi-Track Waveform Timeline */}
+              <div style={{ flex: 1, minHeight: '220px', marginBottom: '12px' }}>
+                <WaveformEditor
+                  audioBuffer={audioBuffer}
+                  speakerABuffer={bufferA}
+                  speakerBBuffer={bufferB}
+                  onBufferUpdate={setAudioBuffer}
+                  onSpeakerBuffersUpdate={(a, b) => {
+                    setBufferA(a);
+                    setBufferB(b);
+                  }}
+                  onAddMarker={handleAddMarker}
+                  seekTime={seekTargetTime}
+                />
+              </div>
+
+              {/* Lower Tray: MPC Soundboard or Cue Markers */}
+              <div style={{ paddingTop: '10px', borderTop: '1px solid var(--border-dim)' }}>
+                {activeRightTab === 'soundboard' ? (
+                  <SoundboardPanel audioContext={engineA.current?.audioContext || null} />
+                ) : (
+                  <MarkerList
+                    markers={markers}
+                    onDeleteMarker={(id) => setMarkers(markers.filter((m) => m.id !== id))}
+                    onJumpToMarker={(t) => setSeekTargetTime(t)}
+                  />
+                )}
+              </div>
+            </div>
+          </div>
+        </section>
+
       </main>
+
 
       {/* Modals */}
       {showInviteModal && (

@@ -8,6 +8,7 @@ import { AnalyserEngine, type AnalysisData } from './AnalyserEngine';
 import { createAudioBufferFromPCM } from './AudioBufferUtils';
 import { FxRackEngine, DEFAULT_FX_CONFIG, type FxConfig } from './FxRackEngine';
 import { NoiseSuppressionEngine } from './NoiseSuppressionEngine';
+import { ensureAudioWorkletLoaded } from './AudioWorkletRecorder';
 
 export interface DeviceInfo {
   deviceId: string;
@@ -26,7 +27,9 @@ export class SpeakerAudioEngine {
   private analyserEngine: AnalyserEngine | null = null;
   private gainNode: GainNode | null = null;
   private scriptNode: ScriptProcessorNode | null = null;
-  private silentSink: GainNode | null = null; // Tracks the silent sink to avoid duplicate connections
+  private workletNode: AudioWorkletNode | null = null;
+  private isWorkletActive = false;
+  private silentSink: GainNode | null = null;
 
   private isRecording = false;
   private isPaused = false;
@@ -60,6 +63,9 @@ export class SpeakerAudioEngine {
       this.ctx = new AudioCtx({ sampleRate });
       if (this.ctx.state === 'suspended') await this.ctx.resume();
     }
+
+    // Try loading AudioWorklet processor module
+    this.isWorkletActive = await ensureAudioWorkletLoaded(this.ctx);
 
     this.noiseEngine = new NoiseSuppressionEngine(this.ctx);
     this.fxRack = new FxRackEngine(this.ctx);
@@ -100,7 +106,6 @@ export class SpeakerAudioEngine {
     try {
       this.stream = await navigator.mediaDevices.getUserMedia(constraints);
     } catch (err) {
-      // Fallback to default audio input if ideal constraint failed
       console.warn('Ideal device constraint failed, falling back to default mic:', err);
       this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     }
@@ -121,43 +126,7 @@ export class SpeakerAudioEngine {
       this.sourceNode.connect(this.gainNode!);
     }
 
-    if (this.scriptNode) {
-      this.scriptNode.disconnect();
-    }
-    this.scriptNode = this.ctx.createScriptProcessor(2048, 1, 1);
-    this.scriptNode.onaudioprocess = (e: AudioProcessingEvent) => {
-      const rawInput = e.inputBuffer.getChannelData(0);
-
-      // Metering & recording with applied gain
-      let peak = 0, sumSq = 0;
-      const processed = new Float32Array(rawInput.length);
-      for (let i = 0; i < rawInput.length; i++) {
-        const val = rawInput[i];
-        processed[i] = val;
-        const abs = Math.abs(val);
-        if (abs > peak) peak = abs;
-        sumSq += val * val;
-      }
-      const rms = Math.sqrt(sumSq / rawInput.length);
-      if (this.meterCallback) {
-        this.meterCallback({ peak, rms });
-      }
-
-      if (this.isRecording && !this.isPaused && !this.isMuted) {
-        this.recordedChunks.push(processed);
-        this.totalSamples += processed.length;
-      }
-    };
-
-    // Feed gain-adjusted signal to scriptNode for recording & visual metering
-    this.gainNode!.connect(this.scriptNode);
-
-    // Keep scriptProcessor active without duplicate audio output
-    const silentSink = this.ctx.createGain();
-    silentSink.gain.value = 0;
-    this.scriptNode.connect(silentSink);
-    silentSink.connect(this.ctx.destination);
-
+    this.setupAudioCaptureNode();
     this.applyMuteState();
   }
 
@@ -170,13 +139,31 @@ export class SpeakerAudioEngine {
 
     this.stream = stream;
 
-    // Disconnect previous source cleanly
     if (this.sourceNode) {
       try { this.sourceNode.disconnect(); } catch {}
       this.sourceNode = null;
     }
 
-    // Disconnect previous script node cleanly (avoids gain node double-connect noise)
+    this.sourceNode = this.ctx.createMediaStreamSource(this.stream);
+    this.sourceNode.connect(this.gainNode!);
+    this.gainNode!.connect(this.analyserEngine!.node);
+
+    if (this.monitorOutput) {
+      this.gainNode!.connect(this.ctx.destination);
+    }
+
+    this.setupAudioCaptureNode();
+    this.applyMuteState();
+  }
+
+  private setupAudioCaptureNode() {
+    if (!this.ctx || !this.gainNode) return;
+
+    // Clean up any existing capture nodes
+    if (this.workletNode) {
+      try { this.workletNode.disconnect(); } catch {}
+      this.workletNode = null;
+    }
     if (this.scriptNode) {
       try { this.scriptNode.disconnect(); } catch {}
       this.scriptNode = null;
@@ -186,30 +173,35 @@ export class SpeakerAudioEngine {
       this.silentSink = null;
     }
 
-    // Also disconnect gainNode from any old scriptNode connections
-    if (this.gainNode) {
-      try { this.gainNode.disconnect(this.analyserEngine!.node); } catch {}
+    // Try AudioWorklet thread isolation first
+    if (this.isWorkletActive) {
+      try {
+        this.workletNode = new AudioWorkletNode(this.ctx, 'pcm-recorder-processor');
+        this.workletNode.port.onmessage = (event) => {
+          const { buffer, peak, rms } = event.data;
+          if (this.meterCallback) {
+            this.meterCallback({ peak, rms });
+          }
+
+          if (this.isRecording && !this.isPaused && !this.isMuted && buffer) {
+            const chunk = new Float32Array(buffer);
+            this.recordedChunks.push(chunk);
+            this.totalSamples += chunk.length;
+          }
+        };
+
+        this.gainNode.connect(this.workletNode);
+        return;
+      } catch (err) {
+        console.warn('AudioWorkletNode instantiation failed, using ScriptProcessor fallback:', err);
+      }
     }
 
-    this.sourceNode = this.ctx.createMediaStreamSource(this.stream);
-
-    // For remote/incoming streams: bypass NoiseSuppressionEngine & FxRack entirely.
-    // Going through the noise gate on a compressed WebRTC stream causes noise artifacts.
-    // Audio Graph: sourceNode -> gainNode -> analyserEngine
-    this.sourceNode.connect(this.gainNode!);
-    this.gainNode!.connect(this.analyserEngine!.node);
-
-    // If monitoring (remote audio playback to speakers), connect gainNode to destination
-    if (this.monitorOutput) {
-      this.gainNode!.connect(this.ctx.destination);
-    }
-
-    // ScriptProcessor for PCM recording & metering
-    this.scriptNode = this.ctx.createScriptProcessor(4096, 1, 1);
+    // High-reliability ScriptProcessorNode Fallback
+    this.scriptNode = this.ctx.createScriptProcessor(2048, 1, 1);
     this.scriptNode.onaudioprocess = (e: AudioProcessingEvent) => {
       const rawInput = e.inputBuffer.getChannelData(0);
 
-      // Metering & recording
       let peak = 0, sumSq = 0;
       const processed = new Float32Array(rawInput.length);
       for (let i = 0; i < rawInput.length; i++) {
@@ -230,16 +222,12 @@ export class SpeakerAudioEngine {
       }
     };
 
-    // Feed gain-adjusted signal to scriptNode for recording & metering
-    this.gainNode!.connect(this.scriptNode);
+    this.gainNode.connect(this.scriptNode);
 
-    // Silent sink to keep ScriptProcessor alive (required by Web Audio API)
     this.silentSink = this.ctx.createGain();
     this.silentSink.gain.value = 0;
     this.scriptNode.connect(this.silentSink);
     this.silentSink.connect(this.ctx.destination);
-
-    this.applyMuteState();
   }
 
   public setNoiseSuppression(enabled: boolean): void {
@@ -251,6 +239,10 @@ export class SpeakerAudioEngine {
   public applyVocalPreset(presetKey: string): FxConfig {
     if (this.fxRack) {
       this.fxConfig = this.fxRack.applyPreset(presetKey);
+      if (this.noiseEngine) {
+        this.noiseEngine.setEnabled(this.fxConfig.gateEnabled);
+        this.noiseEngine.setThresholdDb(this.fxConfig.gateThresholdDb);
+      }
     }
     return this.fxConfig;
   }
@@ -259,6 +251,10 @@ export class SpeakerAudioEngine {
     this.fxConfig = { ...config };
     if (this.fxRack) {
       this.fxRack.updateConfig(this.fxConfig);
+    }
+    if (this.noiseEngine) {
+      this.noiseEngine.setEnabled(this.fxConfig.gateEnabled);
+      this.noiseEngine.setThresholdDb(this.fxConfig.gateThresholdDb);
     }
   }
 

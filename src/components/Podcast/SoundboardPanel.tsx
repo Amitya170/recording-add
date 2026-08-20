@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Volume2, Music, Sparkles, Smile, Radio } from 'lucide-react';
 
 interface SoundboardPanelProps {
@@ -8,14 +8,14 @@ interface SoundboardPanelProps {
 export const SoundboardPanel: React.FC<SoundboardPanelProps> = ({ audioContext }) => {
   const [activeSound, setActiveSound] = useState<string | null>(null);
 
-  const getCtx = (): AudioContext => {
+  const getCtx = useCallback((): AudioContext => {
     if (audioContext && audioContext.state !== 'closed') return audioContext;
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
     return new AudioCtx();
-  };
+  }, [audioContext]);
 
-  // Web Audio Synthesized Sound Effects (No external files needed)
-  const playIntroJingle = () => {
+  // Web Audio Synthesized Sound Effects
+  const playIntroJingle = useCallback(() => {
     const ctx = getCtx();
     if (ctx.state === 'suspended') ctx.resume();
     setActiveSound('intro');
@@ -37,10 +37,10 @@ export const SoundboardPanel: React.FC<SoundboardPanelProps> = ({ audioContext }
       osc.stop(startTime + 0.6);
     });
 
-    setTimeout(() => setActiveSound(null), 1200);
-  };
+    setTimeout(() => setActiveSound((curr) => (curr === 'intro' ? null : curr)), 1200);
+  }, [getCtx]);
 
-  const playApplause = () => {
+  const playApplause = useCallback(() => {
     const ctx = getCtx();
     if (ctx.state === 'suspended') ctx.resume();
     setActiveSound('applause');
@@ -70,10 +70,10 @@ export const SoundboardPanel: React.FC<SoundboardPanelProps> = ({ audioContext }
     gain.connect(ctx.destination);
 
     noise.start();
-    setTimeout(() => setActiveSound(null), 2500);
-  };
+    setTimeout(() => setActiveSound((curr) => (curr === 'applause' ? null : curr)), 2500);
+  }, [getCtx]);
 
-  const playLaughter = () => {
+  const playLaughter = useCallback(() => {
     const ctx = getCtx();
     if (ctx.state === 'suspended') ctx.resume();
     setActiveSound('laughter');
@@ -94,10 +94,10 @@ export const SoundboardPanel: React.FC<SoundboardPanelProps> = ({ audioContext }
       osc.stop(ctx.currentTime + delay + 0.12);
     });
 
-    setTimeout(() => setActiveSound(null), 900);
-  };
+    setTimeout(() => setActiveSound((curr) => (curr === 'laughter' ? null : curr)), 900);
+  }, [getCtx]);
 
-  const playOutroStinger = () => {
+  const playOutroStinger = useCallback(() => {
     const ctx = getCtx();
     if (ctx.state === 'suspended') ctx.resume();
     setActiveSound('outro');
@@ -119,52 +119,79 @@ export const SoundboardPanel: React.FC<SoundboardPanelProps> = ({ audioContext }
       osc.stop(startTime + 0.8);
     });
 
-    setTimeout(() => setActiveSound(null), 1500);
-  };
+    setTimeout(() => setActiveSound((curr) => (curr === 'outro' ? null : curr)), 1500);
+  }, [getCtx]);
+
+  // Keyboard shortcut listener for keys 1 to 4
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger if user is typing in an input field
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        return;
+      }
+      if (e.key === '1') playIntroJingle();
+      else if (e.key === '2') playApplause();
+      else if (e.key === '3') playLaughter();
+      else if (e.key === '4') playOutroStinger();
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [playIntroJingle, playApplause, playLaughter, playOutroStinger]);
 
   return (
-    <div className="card-panel" style={{ gap: '8px' }}>
-      <div className="card-header">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <Music size={14} color="var(--accent-cyan)" />
-          <span>STUDIO SOUNDBOARD & SFX</span>
+          <Music size={13} color="var(--accent-cyan)" />
+          <span>MPC STUDIO SOUNDBOARD & SFX PADS</span>
         </div>
-        <span className="tag">WEB AUDIO SYNTH</span>
+        <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>HOTKEYS: [1] [2] [3] [4]</span>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
+      <div className="mpc-soundboard-grid">
         <button
-          className={`btn-transport ${activeSound === 'intro' ? 'btn-cyan' : ''}`}
+          type="button"
+          className={`mpc-pad-button ${activeSound === 'intro' ? 'is-active' : ''}`}
           onClick={playIntroJingle}
-          style={{ justifyContent: 'center', fontSize: '0.72rem', height: '32px' }}
         >
-          <Sparkles size={12} color="var(--accent-cyan)" /> Intro Jingle
+          <span className="mpc-pad-key">1</span>
+          <Sparkles size={18} color="var(--accent-cyan)" />
+          <span className="mpc-pad-label">Intro Jingle</span>
         </button>
 
         <button
-          className={`btn-transport ${activeSound === 'applause' ? 'btn-cyan' : ''}`}
+          type="button"
+          className={`mpc-pad-button ${activeSound === 'applause' ? 'is-active' : ''}`}
           onClick={playApplause}
-          style={{ justifyContent: 'center', fontSize: '0.72rem', height: '32px' }}
         >
-          <Volume2 size={12} color="var(--accent-green)" /> Applause
+          <span className="mpc-pad-key">2</span>
+          <Volume2 size={18} color="var(--accent-green)" />
+          <span className="mpc-pad-label">Applause</span>
         </button>
 
         <button
-          className={`btn-transport ${activeSound === 'laughter' ? 'btn-cyan' : ''}`}
+          type="button"
+          className={`mpc-pad-button ${activeSound === 'laughter' ? 'is-active' : ''}`}
           onClick={playLaughter}
-          style={{ justifyContent: 'center', fontSize: '0.72rem', height: '32px' }}
         >
-          <Smile size={12} color="var(--accent-amber)" /> Laughter SFX
+          <span className="mpc-pad-key">3</span>
+          <Smile size={18} color="var(--accent-amber)" />
+          <span className="mpc-pad-label">Laughter</span>
         </button>
 
         <button
-          className={`btn-transport ${activeSound === 'outro' ? 'btn-cyan' : ''}`}
+          type="button"
+          className={`mpc-pad-button ${activeSound === 'outro' ? 'is-active' : ''}`}
           onClick={playOutroStinger}
-          style={{ justifyContent: 'center', fontSize: '0.72rem', height: '32px' }}
         >
-          <Radio size={12} color="var(--accent-purple)" /> Outro Stinger
+          <span className="mpc-pad-key">4</span>
+          <Radio size={18} color="var(--accent-purple)" />
+          <span className="mpc-pad-label">Outro Stinger</span>
         </button>
       </div>
     </div>
   );
 };
+

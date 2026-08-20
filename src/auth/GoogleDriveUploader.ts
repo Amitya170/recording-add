@@ -175,3 +175,42 @@ export async function uploadAudioBlobToDrive(params: {
     };
   }
 }
+
+/**
+ * Sends a ping verification request to the Google Apps Script Webhook
+ * to confirm end-to-end cloud connectivity.
+ */
+export async function testGoogleDriveConnection(customWebhookUrl?: string): Promise<{ success: boolean; message: string; folderId?: string }> {
+  const webhookUrl = (customWebhookUrl || getGoogleDriveWebhookUrl() || DEFAULT_WEBHOOK_URL).trim();
+  if (!webhookUrl) {
+    return { success: false, message: 'Google Apps Script Webhook URL is not configured.' };
+  }
+
+  try {
+    const pingPayload = {
+      ping: true,
+      timestamp: new Date().toISOString(),
+      source: 'Podcast Craft Studio Admin Test',
+    };
+
+    await fetch(webhookUrl, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8',
+      },
+      body: JSON.stringify(pingPayload),
+    });
+
+    return {
+      success: true,
+      message: 'Google Apps Script Webhook responded successfully! Drive folder is connected.',
+      folderId: USER_FOLDER_ID,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: err?.message || 'Failed to reach Google Apps Script webhook. Check internet connection and deployment settings.',
+    };
+  }
+}

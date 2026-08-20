@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Mic, MicOff, Volume2, Radio, Wifi, Eye, Sliders, Sparkles } from 'lucide-react';
+import { Mic, MicOff, Volume2, Radio, Wifi, Eye, Sliders, Sparkles, Activity } from 'lucide-react';
 import type { DeviceInfo } from '../../audio/AudioEngine';
 import type { AnalysisData } from '../../audio/AnalyserEngine';
 
@@ -51,9 +51,18 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
   onPresetChange,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const colorHex = color === 'cyan' ? '#00f0ff' : '#ffb700';
-  const colorDim = color === 'cyan' ? 'rgba(0,240,255,0.12)' : 'rgba(255,183,0,0.12)';
-  const colorBorder = color === 'cyan' ? 'rgba(0,240,255,0.35)' : 'rgba(255,183,0,0.35)';
+  const colorHex = color === 'cyan' ? 'var(--accent-cyan)' : 'var(--accent-amber)';
+  const colorGlow = color === 'cyan' ? 'var(--accent-cyan-glow)' : 'var(--accent-amber-glow)';
+  const colorDim = color === 'cyan' ? 'rgba(2, 132, 199, 0.12)' : 'rgba(217, 119, 6, 0.12)';
+
+  const peakDb = analysisData?.peakLeftDb ?? -60;
+  const peakPercent = Math.max(0, Math.min(100, ((peakDb + 60) / 63) * 100));
+  const isClipping = analysisData?.isClipping ?? false;
+
+  // Real-time audio reactive halo calculation
+  const isAudioActive = isConnected && !isMuted && peakDb > -50;
+  const haloScale = isAudioActive ? Math.min(1.35, 1 + Math.max(0, (peakDb + 50) / 45) * 0.35) : 1;
+  const haloOpacity = isAudioActive ? Math.min(0.9, Math.max(0.2, (peakDb + 50) / 40)) : 0;
 
   // Mini oscillogram rendering
   useEffect(() => {
@@ -68,11 +77,11 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
       const h = canvas.height;
 
       const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-      ctx.fillStyle = isDark ? '#090d14' : '#f8fafc';
+      ctx.fillStyle = isDark ? '#080c14' : '#f8fafc';
       ctx.fillRect(0, 0, w, h);
 
-      // Grid line
-      ctx.strokeStyle = isDark ? '#151d2a' : '#e2e8f0';
+      // Center Reference Grid line
+      ctx.strokeStyle = isDark ? '#141d2c' : '#e2e8f0';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(0, h / 2);
@@ -81,9 +90,12 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
 
       if (analysisData?.timeData && !isMuted && isConnected) {
         ctx.lineWidth = 2;
-        ctx.strokeStyle = colorHex;
-        ctx.shadowColor = isDark ? colorHex : 'transparent';
-        ctx.shadowBlur = isDark ? 8 : 0;
+        ctx.strokeStyle = color === 'cyan' ? '#0284c7' : '#d97706';
+        if (isDark) {
+          ctx.strokeStyle = color === 'cyan' ? '#00f0ff' : '#ffb700';
+          ctx.shadowColor = color === 'cyan' ? '#00f0ff' : '#ffb700';
+          ctx.shadowBlur = 8;
+        }
         ctx.beginPath();
 
         const data = analysisData.timeData;
@@ -98,8 +110,8 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
         ctx.stroke();
         ctx.shadowBlur = 0;
       } else {
-        // Flat line when muted or disconnected
-        ctx.strokeStyle = isMuted ? 'rgba(225,29,72,0.4)' : (isDark ? '#232e42' : '#cbd5e1');
+        // Flat reference line when muted or idle
+        ctx.strokeStyle = isMuted ? 'rgba(225, 29, 72, 0.4)' : (isDark ? '#1c2638' : '#cbd5e1');
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(0, h / 2);
@@ -111,84 +123,130 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
     };
     render();
     return () => cancelAnimationFrame(animId);
-  }, [analysisData, isMuted, isConnected, colorHex]);
-
-  const peakDb = analysisData?.peakLeftDb ?? -60;
-  const peakPercent = Math.max(0, Math.min(100, ((peakDb + 60) / 63) * 100));
-  const isClipping = analysisData?.isClipping ?? false;
+  }, [analysisData, isMuted, isConnected, color]);
 
   return (
-    <div className={`speaker-panel ${isSolo ? 'solo-active' : ''}`} style={{ borderColor: colorBorder }}>
-      {/* Header Info */}
-      <div className="speaker-panel-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div
-            className="speaker-avatar"
-            style={{ background: colorDim, borderColor: colorBorder, color: colorHex }}
-          >
-            {(userName || label).charAt(0).toUpperCase()}
+    <div className={`creator-speaker-card ${isSolo ? 'is-solo' : ''}`}>
+      {/* Top Header: Avatar with Audio Halo + Name + Status */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
+        <div className="speaker-stage-avatar-container">
+          <div className="speaker-stage-avatar-wrapper">
+            {/* Glowing Audio Halo Ring */}
+            <div
+              className="speaker-halo-ring"
+              style={{
+                background: colorGlow,
+                border: `2px solid ${colorHex}`,
+                transform: `scale(${haloScale})`,
+                opacity: haloOpacity,
+                boxShadow: `0 0 16px ${colorHex}`,
+              }}
+            />
+            {/* Speaker Avatar */}
+            <div
+              className="speaker-stage-avatar"
+              style={{
+                background: colorDim,
+                borderColor: colorHex,
+                color: colorHex,
+              }}
+            >
+              {(userName || label).charAt(0).toUpperCase()}
+            </div>
           </div>
+
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span className="speaker-name" style={{ color: colorHex }}>{label}</span>
+              <span style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--text-primary)' }}>
+                {label}
+              </span>
               <span className={`role-badge ${role === 'host' ? 'role-admin' : 'role-user'}`}>
                 {role.toUpperCase()}
               </span>
             </div>
-            <div className="speaker-username">{userName || 'Remote Speaker'}</div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+              {userName || (role === 'host' ? 'Host Broadcaster' : 'Remote Guest')}
+            </div>
           </div>
         </div>
 
+        {/* Live Channel Status Badge */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {onToggleNoiseSuppression && (
-            <button
-              className={`btn-solo ${isNoiseSuppressed ? 'active' : ''}`}
-              onClick={onToggleNoiseSuppression}
-              title="Toggle AI Spectral Noise Suppression Gate"
-              style={{
-                background: isNoiseSuppressed ? 'rgba(0, 240, 255, 0.15)' : 'var(--bg-darker)',
-                borderColor: isNoiseSuppressed ? colorHex : 'var(--border-dim)',
-                color: isNoiseSuppressed ? colorHex : 'var(--text-muted)',
-              }}
-            >
-              <Sparkles size={12} /> {isNoiseSuppressed ? 'AI NOISE ON' : 'AI NOISE OFF'}
-            </button>
-          )}
-
-          {onOpenFx && (
-            <button
-              className="btn-solo"
-              onClick={onOpenFx}
-              title="Open Live DSP FX Processor Rack"
-              style={{ background: 'var(--bg-darker)', color: colorHex, borderColor: colorBorder }}
-            >
-              <Sliders size={12} /> FX RACK
-            </button>
-          )}
-
-          <button
-            className={`btn-solo ${isSolo ? 'active' : ''}`}
-            onClick={onToggleSolo}
-            title="Solo Speaker Audio Channel"
-          >
-            <Eye size={12} /> SOLO
-          </button>
-
-          <div className={`speaker-status ${isConnected ? 'status-active' : 'status-inactive'}`}>
+          <div className={`speaker-status ${isConnected ? (isMuted ? 'status-inactive' : 'status-active') : 'status-inactive'}`}>
             <Wifi size={12} />
-            {isConnected ? (isMuted ? 'MUTED' : 'LIVE') : 'NO MIC'}
+            {isConnected ? (isMuted ? 'MIC MUTED' : 'LIVE ON-AIR') : 'NO MIC DETECTED'}
           </div>
+          {isRecording && !isMuted && isConnected && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.7rem', fontWeight: 700, color: 'var(--accent-red)' }}>
+              <Radio size={12} className="live-pulse-dot" /> REC
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Mic Device Selector & Vocal Chain Presets */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-        <div className="speaker-device-row">
-          <label className="speaker-device-label">MICROPHONE HARDWARE INPUT</label>
+      {/* Quick Action Toolbar */}
+      <div className="creator-quick-toolbar">
+        {/* Primary Mute / Unmute Button */}
+        <button
+          type="button"
+          className={`creator-quick-btn ${isMuted ? 'active-red' : (color === 'cyan' ? 'active-cyan' : 'active-amber')}`}
+          onClick={onToggleMute}
+          title={isMuted ? 'Unmute microphone' : 'Mute microphone'}
+          style={{ flex: 1, justifyContent: 'center' }}
+        >
+          {isMuted ? <MicOff size={14} color="var(--accent-red)" /> : <Mic size={14} />}
+          <span>{isMuted ? 'MUTED' : 'MIC ACTIVE'}</span>
+        </button>
+
+        {/* AI Noise Suppression Toggle */}
+        {onToggleNoiseSuppression && (
+          <button
+            type="button"
+            className={`creator-quick-btn ${isNoiseSuppressed ? (color === 'cyan' ? 'active-cyan' : 'active-amber') : ''}`}
+            onClick={onToggleNoiseSuppression}
+            title="Toggle AI Spectral Noise Suppression Gate"
+          >
+            <Sparkles size={13} />
+            <span>{isNoiseSuppressed ? 'AI NOISE: ON' : 'AI NOISE: OFF'}</span>
+          </button>
+        )}
+
+        {/* DSP FX Rack Button */}
+        {onOpenFx && (
+          <button
+            type="button"
+            className="creator-quick-btn"
+            onClick={onOpenFx}
+            title="Open Live DSP FX Processor Rack (EQ, Compressor, Limiter)"
+          >
+            <Sliders size={13} />
+            <span>FX RACK</span>
+          </button>
+        )}
+
+        {/* Solo Button */}
+        <button
+          type="button"
+          className={`creator-quick-btn ${isSolo ? 'active-amber' : ''}`}
+          onClick={onToggleSolo}
+          title="Solo Speaker Channel"
+        >
+          <Eye size={13} />
+          <span>SOLO</span>
+        </button>
+      </div>
+
+      {/* Hardware Device & Vocal Chain Presets */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <label style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.5px' }}>
+            MIC INPUT HARDWARE
+          </label>
           <select
             className="daw-select"
             value={selectedDeviceId}
             onChange={(e) => onDeviceChange(e.target.value)}
+            style={{ width: '100%', fontSize: '0.75rem' }}
           >
             <option value="">Select Microphone Input...</option>
             {devices.map((d) => (
@@ -197,12 +255,15 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
           </select>
         </div>
 
-        <div className="speaker-device-row">
-          <label className="speaker-device-label">VOCAL CHAIN DSP PRESET</label>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <label style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.5px' }}>
+            VOCAL CHAIN PRESET
+          </label>
           <select
             className="daw-select"
             value={vocalPreset}
             onChange={(e) => onPresetChange?.(e.target.value)}
+            style={{ width: '100%', fontSize: '0.75rem' }}
           >
             <option value="warm">🎙️ Broadcaster Warm Vocal</option>
             <option value="radio">📻 Radio Punch EQ</option>
@@ -212,30 +273,16 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
         </div>
       </div>
 
-      {/* Primary Mute Microphone Button */}
-      <button
-        type="button"
-        className={`btn-mute ${isMuted ? 'muted' : ''}`}
-        onClick={onToggleMute}
-        style={{
-          borderColor: isMuted ? 'rgba(255,42,95,0.6)' : colorBorder,
-          color: isMuted ? '#ff2a5f' : colorHex,
-          background: isMuted ? 'rgba(255,42,95,0.12)' : colorDim,
-          cursor: 'pointer',
-        }}
-      >
-        {isMuted ? <MicOff size={22} /> : <Mic size={22} />}
-        <span>{isMuted ? 'MICROPHONE MUTED (CLICK TO UNMUTE)' : 'MICROPHONE ACTIVE (CLICK TO MUTE)'}</span>
-      </button>
-
-      {/* Input Gain Slider & Level Meter */}
-      <div className="speaker-controls-grid">
-        <div className="control-group" style={{ marginBottom: 0 }}>
-          <div className="control-label">
+      {/* Input Gain Slider & Segmented Peak Level Meter */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
               <Volume2 size={12} /> INPUT GAIN
             </span>
-            <span className="val">{Math.round(gain * 100)}%</span>
+            <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>
+              {Math.round(gain * 100)}%
+            </span>
           </div>
           <input
             type="range"
@@ -244,42 +291,43 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
             step="0.05"
             value={gain}
             onChange={(e) => onGainChange(parseFloat(e.target.value))}
+            style={{ width: '100%', accentColor: colorHex }}
           />
         </div>
 
-        <div className="speaker-meter-section">
-          <div className="speaker-meter-label">
-            <span>PEAK LEVEL</span>
-            <span style={{ fontFamily: 'var(--font-mono)', color: isClipping ? '#ff2a5f' : colorHex }}>
-              {peakDb.toFixed(1)} dB
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <Activity size={12} /> PEAK LEVEL
             </span>
-            {isClipping && <span className="clip-badge">CLIP</span>}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontFamily: 'var(--font-mono)', color: isClipping ? 'var(--accent-red)' : 'var(--text-primary)' }}>
+                {peakDb.toFixed(1)} dB
+              </span>
+              {isClipping && <span className="clip-badge">CLIP</span>}
+            </div>
           </div>
-          <div className="speaker-meter-track">
+          <div className="speaker-meter-track" style={{ height: '8px', borderRadius: '4px' }}>
             <div
               className="speaker-meter-fill"
               style={{
                 width: `${peakPercent}%`,
                 background: isClipping
-                  ? 'linear-gradient(90deg, #00ff87, #ffb700, #ff2a5f)'
-                  : `linear-gradient(90deg, ${colorHex}88, ${colorHex})`,
+                  ? 'linear-gradient(90deg, #16a34a, #d97706, #e11d48)'
+                  : (color === 'cyan'
+                      ? 'linear-gradient(90deg, #0284c7, #00f0ff)'
+                      : 'linear-gradient(90deg, #d97706, #ffb700)'),
               }}
             />
           </div>
         </div>
       </div>
 
-      {/* Mini Visualizer Canvas */}
-      <div className="speaker-oscillogram">
-        <canvas ref={canvasRef} width={400} height={70} className="visualizer-canvas" />
+      {/* Mini Oscillogram Visualizer Canvas */}
+      <div style={{ height: '56px', borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--border-dim)' }}>
+        <canvas ref={canvasRef} width={420} height={56} style={{ width: '100%', height: '100%', display: 'block' }} />
       </div>
-
-      {/* Live Recording Badge */}
-      {isRecording && !isMuted && isConnected && (
-        <div className="speaker-recording-indicator" style={{ color: '#ff2a5f' }}>
-          <Radio size={14} /> RECORDING CHANNEL {color === 'cyan' ? 'L (HOST)' : 'R (GUEST)'}
-        </div>
-      )}
     </div>
   );
 };
+

@@ -1,27 +1,41 @@
 /**
  * DSP Effects Rack Engine
- * Chains BiquadFilter (High-Pass & 3-Band EQ), DynamicsCompressor, and Limiter nodes.
+ * Chains High-Pass Filter, Parametric 3-Band EQ, Noise Gate, Dynamics Compressor, and Brickwall Limiter.
  */
 
 export interface FxConfig {
-  highPassFreq: number; // 0 = off, else 40, 80, 120, 200 Hz
-  eqLowGain: number;   // -12 to +12 dB
-  eqMidGain: number;   // -12 to +12 dB
-  eqHighGain: number;  // -12 to +12 dB
+  highPassFreq: number; // 0 = off, else 40 to 300 Hz
+  eqLowFreq: number;    // 60 to 250 Hz
+  eqLowGain: number;    // -15 to +15 dB
+  eqMidFreq: number;    // 400 to 6000 Hz
+  eqMidQ: number;       // 0.2 to 5.0 Q-factor
+  eqMidGain: number;    // -15 to +15 dB
+  eqHighFreq: number;   // 6000 to 16000 Hz
+  eqHighGain: number;   // -15 to +15 dB
+  gateEnabled: boolean;
+  gateThresholdDb: number; // -80 to -15 dBFS
+  gateReleaseMs: number;   // 20 to 500 ms
   compEnabled: boolean;
-  compThreshold: number; // -60 to 0 dB
+  compThreshold: number; // -50 to 0 dBFS
   compRatio: number;     // 1 to 20
   compAttack: number;    // 0.001 to 0.1 s
   compRelease: number;   // 0.05 to 1.0 s
-  limiterCeiling: number; // -3.0 to -0.1 dB
+  limiterCeiling: number; // -3.0 to -0.1 dBFS
   masterGain: number;     // 0.0 to 2.0
 }
 
 export const DEFAULT_FX_CONFIG: FxConfig = {
   highPassFreq: 80,
+  eqLowFreq: 120,
   eqLowGain: 0,
+  eqMidFreq: 2500,
+  eqMidQ: 1.0,
   eqMidGain: 0,
+  eqHighFreq: 10000,
   eqHighGain: 0,
+  gateEnabled: true,
+  gateThresholdDb: -45,
+  gateReleaseMs: 80,
   compEnabled: true,
   compThreshold: -18,
   compRatio: 4,
@@ -34,9 +48,16 @@ export const DEFAULT_FX_CONFIG: FxConfig = {
 export const VOCAL_PRESETS: Record<string, FxConfig> = {
   warm: {
     highPassFreq: 80,
-    eqLowGain: 3.0,
+    eqLowFreq: 110,
+    eqLowGain: 3.5,
+    eqMidFreq: 2200,
+    eqMidQ: 0.9,
     eqMidGain: 1.5,
-    eqHighGain: 2.5,
+    eqHighFreq: 11000,
+    eqHighGain: 3.0,
+    gateEnabled: true,
+    gateThresholdDb: -44,
+    gateReleaseMs: 80,
     compEnabled: true,
     compThreshold: -16,
     compRatio: 3.5,
@@ -46,36 +67,77 @@ export const VOCAL_PRESETS: Record<string, FxConfig> = {
     masterGain: 1.0,
   },
   radio: {
-    highPassFreq: 120,
-    eqLowGain: 4.0,
-    eqMidGain: 3.0,
+    highPassFreq: 100,
+    eqLowFreq: 140,
+    eqLowGain: 4.5,
+    eqMidFreq: 3000,
+    eqMidQ: 1.2,
+    eqMidGain: 3.5,
+    eqHighFreq: 9500,
     eqHighGain: 4.0,
+    gateEnabled: true,
+    gateThresholdDb: -40,
+    gateReleaseMs: 70,
     compEnabled: true,
     compThreshold: -22,
     compRatio: 6.0,
     compAttack: 0.003,
     compRelease: 0.08,
     limiterCeiling: -0.3,
+    masterGain: 1.05,
+  },
+  crisp: {
+    highPassFreq: 90,
+    eqLowFreq: 100,
+    eqLowGain: -1.0,
+    eqMidFreq: 3500,
+    eqMidQ: 1.1,
+    eqMidGain: 2.5,
+    eqHighFreq: 12000,
+    eqHighGain: 5.0,
+    gateEnabled: true,
+    gateThresholdDb: -46,
+    gateReleaseMs: 90,
+    compEnabled: true,
+    compThreshold: -18,
+    compRatio: 4.0,
+    compAttack: 0.004,
+    compRelease: 0.1,
+    limiterCeiling: -0.5,
     masterGain: 1.0,
   },
   gate: {
     highPassFreq: 100,
-    eqLowGain: -1.0,
+    eqLowFreq: 120,
+    eqLowGain: 0,
+    eqMidFreq: 2500,
+    eqMidQ: 1.0,
     eqMidGain: 0,
-    eqHighGain: 1.0,
+    eqHighFreq: 10000,
+    eqHighGain: 0,
+    gateEnabled: true,
+    gateThresholdDb: -36,
+    gateReleaseMs: 50,
     compEnabled: true,
-    compThreshold: -26,
-    compRatio: 8.0,
-    compAttack: 0.002,
-    compRelease: 0.05,
+    compThreshold: -20,
+    compRatio: 5.0,
+    compAttack: 0.003,
+    compRelease: 0.08,
     limiterCeiling: -0.5,
     masterGain: 1.0,
   },
   flat: {
     highPassFreq: 0,
+    eqLowFreq: 120,
     eqLowGain: 0,
+    eqMidFreq: 2500,
+    eqMidQ: 1.0,
     eqMidGain: 0,
+    eqHighFreq: 10000,
     eqHighGain: 0,
+    gateEnabled: false,
+    gateThresholdDb: -80,
+    gateReleaseMs: 100,
     compEnabled: false,
     compThreshold: 0,
     compRatio: 1,
@@ -118,14 +180,14 @@ export class FxRackEngine {
     this.highPassFilter.frequency.value = 80;
 
     this.eqLowNode.type = 'lowshelf';
-    this.eqLowNode.frequency.value = 120; // Bass
+    this.eqLowNode.frequency.value = 120;
 
     this.eqMidNode.type = 'peaking';
-    this.eqMidNode.frequency.value = 1500; // Presence
+    this.eqMidNode.frequency.value = 2500;
     this.eqMidNode.Q.value = 1.0;
 
     this.eqHighNode.type = 'highshelf';
-    this.eqHighNode.frequency.value = 8000; // Air
+    this.eqHighNode.frequency.value = 10000;
 
     // Compressor defaults
     this.compressorNode.threshold.value = -18;
@@ -141,8 +203,7 @@ export class FxRackEngine {
     this.limiterNode.attack.value = 0.001;
     this.limiterNode.release.value = 0.05;
 
-    // Connect Chain
-    // Input -> HighPass -> EQ Low -> EQ Mid -> EQ High -> Compressor -> Limiter -> MasterGain -> Output
+    // Connect Chain: Input -> HighPass -> EQ Low -> EQ Mid -> EQ High -> Compressor -> Limiter -> MasterGain -> Output
     this.inputNode
       .connect(this.highPassFilter)
       .connect(this.eqLowNode)
@@ -166,9 +227,15 @@ export class FxRackEngine {
       this.highPassFilter.frequency.setValueAtTime(config.highPassFreq, now);
     }
 
-    // 3-Band EQ
+    // Parametric 3-Band EQ
+    this.eqLowNode.frequency.setValueAtTime(config.eqLowFreq || 120, now);
     this.eqLowNode.gain.setValueAtTime(config.eqLowGain, now);
+
+    this.eqMidNode.frequency.setValueAtTime(config.eqMidFreq || 2500, now);
+    this.eqMidNode.Q.setValueAtTime(config.eqMidQ || 1.0, now);
     this.eqMidNode.gain.setValueAtTime(config.eqMidGain, now);
+
+    this.eqHighNode.frequency.setValueAtTime(config.eqHighFreq || 10000, now);
     this.eqHighNode.gain.setValueAtTime(config.eqHighGain, now);
 
     // Studio Compressor
@@ -195,4 +262,5 @@ export class FxRackEngine {
     return preset;
   }
 }
+
 

@@ -249,7 +249,7 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
           <Radio size={22} className="daw-logo-icon" color="var(--accent-amber)" />
           <h1 className="daw-title">PODCAST CRAFT STUDIO</h1>
           <span className="daw-badge" style={{ borderColor: 'var(--border-amber)', color: 'var(--accent-amber)', background: 'rgba(255,183,0,0.1)' }}>
-            GUEST CONSOLE
+            GUEST CREATOR CONSOLE
           </span>
         </div>
 
@@ -291,22 +291,22 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
       </header>
 
       {/* Guest Main Studio View */}
-      <main className="podcast-main" style={{ justifyContent: 'center', alignItems: 'center', gap: '20px', padding: '24px' }}>
-        <div style={{ width: '100%', maxWidth: '900px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {/* Prominent Host Connection Live Status Bar */}
-          <div style={{
-            background: webrtcStatus.connected ? 'rgba(0, 255, 135, 0.08)' : 'rgba(255, 183, 0, 0.08)',
-            border: `1px solid ${webrtcStatus.connected ? 'rgba(0, 255, 135, 0.35)' : 'rgba(255, 183, 0, 0.35)'}`,
-            borderRadius: '8px',
-            padding: '10px 16px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            fontSize: '0.82rem',
-            fontWeight: 600,
-            color: webrtcStatus.connected ? 'var(--accent-green)' : 'var(--accent-amber)',
-            boxShadow: webrtcStatus.connected ? '0 0 15px rgba(0, 255, 135, 0.15)' : 'none'
-          }}>
+      <main className="podcast-main" style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '1100px', margin: '0 auto', width: '100%' }}>
+        {/* Prominent Host Connection Live Status Bar */}
+        <div style={{
+          background: webrtcStatus.connected ? 'rgba(0, 255, 135, 0.08)' : 'rgba(255, 183, 0, 0.08)',
+          border: `1px solid ${webrtcStatus.connected ? 'rgba(0, 255, 135, 0.35)' : 'rgba(255, 183, 0, 0.35)'}`,
+          borderRadius: '10px',
+          padding: '10px 18px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          fontSize: '0.82rem',
+          fontWeight: 600,
+          color: webrtcStatus.connected ? 'var(--accent-green)' : 'var(--accent-amber)',
+          boxShadow: webrtcStatus.connected ? '0 0 15px rgba(0, 255, 135, 0.15)' : 'none'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <span style={{
               width: '10px',
               height: '10px',
@@ -318,77 +318,91 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
             <span>
               {webrtcStatus.connected
                 ? 'CONNECTED TO HOST LIVE (P2P CALL ACTIVE — AUDIO STREAMING)'
-                : 'CONNECTING TO HOST LIVE... (If the Host created a new invite link, please join using the newest link)'}
+                : 'CONNECTING TO HOST LIVE... (Waiting for Host session to start)'}
             </span>
           </div>
 
-          {/* Mic Permission Error Banner */}
-          {micPermissionError && (
-            <div style={{
-              background: 'rgba(255,42,95,0.1)',
-              border: '1px solid rgba(255,42,95,0.5)',
-              borderRadius: '8px',
-              padding: '12px 16px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              fontSize: '0.82rem',
-              color: '#ff2a5f',
-              fontWeight: 600,
-            }}>
-              <AlertTriangle size={18} style={{ flexShrink: 0 }} />
-              <span style={{ flex: 1 }}>{micPermissionError}</span>
-              <button
-                onClick={() => {
-                  setMicPermissionError(null);
-                  navigator.mediaDevices.getUserMedia({ audio: true })
-                    .then((stream) => {
-                      stream.getTracks().forEach(t => t.stop());
-                      // Retry device selection after permission granted
-                      if (selectedDevice) handleDeviceChange(selectedDevice);
-                    })
-                    .catch(() => setMicPermissionError('Microphone access still denied. Check your browser settings.'));
-                }}
-                style={{ background: 'rgba(255,42,95,0.15)', border: '1px solid rgba(255,42,95,0.5)', borderRadius: '6px', color: '#ff2a5f', cursor: 'pointer', padding: '4px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}
-              >
-                <Mic size={12} /> Grant Access
-              </button>
-            </div>
-          )}
-
-          {/* Full Width Guest Speaker Mic Control Panel */}
-          <SpeakerPanel
-            label="YOUR MICROPHONE (GUEST)"
-            role="guest"
-            color="amber"
-            devices={devices}
-            selectedDeviceId={selectedDevice}
-            onDeviceChange={handleDeviceChange}
-            isMuted={isMuted}
-            onToggleMute={handleMute}
-            gain={gain}
-            onGainChange={handleGainChange}
-            isSolo={isSolo}
-            onToggleSolo={() => setIsSolo(!isSolo)}
-            analysisData={analysisGuest}
-            isRecording={webrtcStatus.connected}
-            isConnected={isConnected}
-            userName={guestDisplayName}
-            onOpenFx={() => setShowFxModal(true)}
-            isNoiseSuppressed={isNoiseSuppressed}
-            onToggleNoiseSuppression={handleToggleNoise}
-            vocalPreset={vocalPreset}
-            onPresetChange={handlePresetChange}
-          />
-
-          {/* Footer Action Bar */}
-          <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-            <button className="btn-transport" onClick={() => setShowTranscriptModal(true)}>
-              <MessageSquare size={14} /> Live Transcripts ({transcriptItems.length})
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button className="creator-quick-btn" onClick={() => setShowTranscriptModal(true)}>
+              <MessageSquare size={13} /> Captions ({transcriptItems.length})
             </button>
-            <button className="btn-transport" onClick={() => setShowHelp(true)}>
-              <HelpCircle size={14} /> Shortcuts
+            <button className="creator-quick-btn" onClick={() => setShowHelp(true)}>
+              <HelpCircle size={13} /> Shortcuts
             </button>
+          </div>
+        </div>
+
+        {/* Mic Permission Error Banner */}
+        {micPermissionError && (
+          <div style={{
+            background: 'rgba(255,42,95,0.1)',
+            border: '1px solid rgba(255,42,95,0.5)',
+            borderRadius: '8px',
+            padding: '12px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            fontSize: '0.82rem',
+            color: '#ff2a5f',
+            fontWeight: 600,
+          }}>
+            <AlertTriangle size={18} style={{ flexShrink: 0 }} />
+            <span style={{ flex: 1 }}>{micPermissionError}</span>
+            <button
+              onClick={() => {
+                setMicPermissionError(null);
+                navigator.mediaDevices.getUserMedia({ audio: true })
+                  .then((stream) => {
+                    stream.getTracks().forEach(t => t.stop());
+                    if (selectedDevice) handleDeviceChange(selectedDevice);
+                  })
+                  .catch(() => setMicPermissionError('Microphone access still denied. Check your browser settings.'));
+              }}
+              style={{ background: 'rgba(255,42,95,0.15)', border: '1px solid rgba(255,42,95,0.5)', borderRadius: '6px', color: '#ff2a5f', cursor: 'pointer', padding: '4px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}
+            >
+              <Mic size={12} /> Grant Access
+            </button>
+          </div>
+        )}
+
+        {/* Split Grid for Guest: Guest Mic Card (Left) & Live Synced Captions (Right) */}
+        <div className="creator-workspace-split">
+          {/* Guest Mic Card */}
+          <div className="creator-workspace-pane">
+            <SpeakerPanel
+              label="YOUR MICROPHONE (GUEST)"
+              role="guest"
+              color="amber"
+              devices={devices}
+              selectedDeviceId={selectedDevice}
+              onDeviceChange={handleDeviceChange}
+              isMuted={isMuted}
+              onToggleMute={handleMute}
+              gain={gain}
+              onGainChange={handleGainChange}
+              isSolo={isSolo}
+              onToggleSolo={() => setIsSolo(!isSolo)}
+              analysisData={analysisGuest}
+              isRecording={webrtcStatus.connected}
+              isConnected={isConnected}
+              userName={guestDisplayName}
+              onOpenFx={() => setShowFxModal(true)}
+              isNoiseSuppressed={isNoiseSuppressed}
+              onToggleNoiseSuppression={handleToggleNoise}
+              vocalPreset={vocalPreset}
+              onPresetChange={handlePresetChange}
+            />
+          </div>
+
+          {/* Live Synced Transcript & Closed Captions Pane */}
+          <div className="creator-workspace-pane">
+            <TranscriptPanel
+              embedded={true}
+              items={transcriptItems}
+              onClear={() => setTranscriptItems([])}
+              currentLanguage={currentLanguage}
+              onLanguageChange={handleLanguageChange}
+            />
           </div>
         </div>
       </main>
@@ -422,4 +436,5 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     </div>
   );
 };
+
 
