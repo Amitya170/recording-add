@@ -7,6 +7,7 @@ import {
   MessageSquare,
   AlertTriangle,
   Mic,
+  RefreshCw,
 } from 'lucide-react';
 import { useAuth } from '../../auth/AuthContext';
 import { isSessionTokenRevoked } from '../../auth/SessionStore';
@@ -405,6 +406,16 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
           </div>
 
           <div style={{ display: 'flex', gap: '8px' }}>
+            {!webrtcStatus.connected && (
+              <button
+                className="creator-quick-btn"
+                onClick={() => webrtcEngine.current?.retryConnection()}
+                style={{ borderColor: 'var(--accent-amber)', color: 'var(--accent-amber)' }}
+                title="Force retry connection"
+              >
+                <RefreshCw size={13} /> Reconnect Now
+              </button>
+            )}
             <button className="creator-quick-btn" onClick={() => setShowTranscriptModal(true)}>
               <MessageSquare size={13} /> Captions ({transcriptItems.length})
             </button>

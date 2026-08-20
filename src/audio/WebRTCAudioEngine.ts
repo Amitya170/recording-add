@@ -295,6 +295,8 @@ export class WebRTCAudioEngine {
     });
   }
 
+  private connectionWatchdog: ReturnType<typeof setTimeout> | null = null;
+
   // ──────────────────────────────────────────────────────────────
   // GUEST — Connect and call Host with auto-retry
   // ──────────────────────────────────────────────────────────────
@@ -303,15 +305,15 @@ export class WebRTCAudioEngine {
     this.stopGuestCallLoop();
     this.attemptGuestCall();
 
-    // Resilient WAN loop: retry only if truly disconnected and not actively negotiating ICE
+    // Active WAN call loop: automatically retries every 5 seconds until connected
     this.guestCallRetryInterval = setInterval(() => {
-      if (!this.isConnected && !this.isDisposed && !this.isConnecting) {
-        console.log('[WebRTC] Guest: retrying P2P call to Host…');
+      if (!this.isConnected && !this.isDisposed) {
+        console.log('[WebRTC] Guest: checking/retrying P2P connection to Host…');
         this.attemptGuestCall();
       } else if (this.isConnected) {
         this.stopGuestCallLoop();
       }
-    }, 6000);
+    }, 5000);
   }
 
   private stopGuestCallLoop() {
@@ -319,14 +321,36 @@ export class WebRTCAudioEngine {
       clearInterval(this.guestCallRetryInterval);
       this.guestCallRetryInterval = null;
     }
+    if (this.connectionWatchdog) {
+      clearTimeout(this.connectionWatchdog);
+      this.connectionWatchdog = null;
+    }
+  }
+
+  public retryConnection() {
+    console.log(`[WebRTC] Manual retry triggered for ${this.role}`);
+    if (this.role === 'guest') {
+      this.isConnecting = false;
+      this.attemptGuestCall();
+    } else {
+      this.scheduleReconnect(500);
+    }
   }
 
   private attemptGuestCall() {
     if (!this.peer || this.peer.destroyed || this.isDisposed) return;
 
-    this.isConnecting = true;
     const hostId = `pcs_host_${this.sessionToken}`;
     console.log('[WebRTC] Guest: connecting to host ID:', hostId);
+
+    // Watchdog: If connection doesn't open within 4.5s, reset state for next retry
+    if (this.connectionWatchdog) clearTimeout(this.connectionWatchdog);
+    this.connectionWatchdog = setTimeout(() => {
+      if (!this.isConnected && !this.isDisposed) {
+        console.log('[WebRTC] Host handshake in progress or waiting for host…');
+        this.isConnecting = false;
+      }
+    }, 4500);
 
     // 1. Data Connection (Immediate handshake)
     try { this.dataConn?.close(); } catch {}
