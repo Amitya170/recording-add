@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './auth/AuthContext';
 import { ThemeProvider } from './styles/ThemeContext';
 import { LoginPage } from './components/Auth/LoginPage';
 import { RegisterPage } from './components/Auth/RegisterPage';
+import { SuperAdminPanel } from './components/SuperAdmin/SuperAdminPanel';
 import { AdminPanel } from './components/Admin/AdminPanel';
 import { PodcastStudio } from './components/Podcast/PodcastStudio';
 import { GuestStudioView } from './components/Podcast/GuestStudioView';
@@ -10,7 +11,7 @@ import { ScrollControls } from './components/Common/ScrollControls';
 import './styles/daw-theme.css';
 
 const AppRouter: React.FC = () => {
-  const { isAuthenticated, isAdmin, currentUser } = useAuth();
+  const { isAuthenticated, isSuperAdmin, isAdmin, currentUser } = useAuth();
   const [inviteToken, setInviteToken] = useState<string | null>(null);
   const [guestNameParam, setGuestNameParam] = useState<string | undefined>(undefined);
   const [hostNameParam, setHostNameParam] = useState<string | undefined>(undefined);
@@ -54,7 +55,12 @@ const AppRouter: React.FC = () => {
     return <LoginPage />;
   }
 
-  // Admin Role → Pure Admin Analytics & Duration Dashboard
+  // Super Admin Role → Multi-Tenant Root Command Portal
+  if (isSuperAdmin) {
+    return <SuperAdminPanel />;
+  }
+
+  // Admin Role → Pure Admin Analytics & Isolated Studio Dashboard
   if (isAdmin) {
     return <AdminPanel />;
   }

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../auth/AuthContext';
-import { Radio, AlertCircle, Mic, Shield, Sparkles, FolderSync, Zap, Lock, Mail, Eye, EyeOff, ArrowRight } from 'lucide-react';
+import { Radio, AlertCircle, Mic, Shield, Crown, Sparkles, FolderSync, Zap, Lock, Mail, Eye, EyeOff, ArrowRight } from 'lucide-react';
 import { ThemeToggle } from '../Common/ThemeToggle';
 
 export const LoginPage: React.FC = () => {
@@ -8,12 +8,12 @@ export const LoginPage: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [selectedRole, setSelectedRole] = useState<'admin' | 'host'>('admin');
+  const [selectedRole, setSelectedRole] = useState<'superadmin' | 'admin' | 'host'>('admin');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [shakeError, setShakeError] = useState(false);
 
-  const handleSelectRole = (role: 'admin' | 'host') => {
+  const handleSelectRole = (role: 'superadmin' | 'admin' | 'host') => {
     setSelectedRole(role);
     setError('');
   };
@@ -162,17 +162,31 @@ export const LoginPage: React.FC = () => {
               </p>
             </div>
 
-            {/* Role Switcher */}
-            <div className="role-switch-pills">
+            {/* Multi-Tenant Role Switcher */}
+            <div className="role-switch-pills" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+              <button
+                type="button"
+                className={`role-switch-btn ${selectedRole === 'superadmin' ? 'is-active' : ''}`}
+                onClick={() => handleSelectRole('superadmin')}
+                style={{ padding: '6px 8px' }}
+              >
+                <Crown size={14} color="var(--accent-amber)" />
+                <div style={{ textAlign: 'left' }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.7rem' }}>Super Admin</div>
+                  <div style={{ fontSize: '0.58rem', opacity: 0.7 }}>Multi-Tenant Root</div>
+                </div>
+              </button>
+
               <button
                 type="button"
                 className={`role-switch-btn ${selectedRole === 'admin' ? 'is-active' : ''}`}
                 onClick={() => handleSelectRole('admin')}
+                style={{ padding: '6px 8px' }}
               >
                 <Shield size={14} />
                 <div style={{ textAlign: 'left' }}>
-                  <div style={{ fontWeight: 700, fontSize: '0.75rem' }}>Admin Console</div>
-                  <div style={{ fontSize: '0.62rem', opacity: 0.7 }}>Full Studio Governance</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.7rem' }}>Studio Admin</div>
+                  <div style={{ fontSize: '0.58rem', opacity: 0.7 }}>Agency Console</div>
                 </div>
               </button>
 
@@ -180,11 +194,12 @@ export const LoginPage: React.FC = () => {
                 type="button"
                 className={`role-switch-btn ${selectedRole === 'host' ? 'is-active' : ''}`}
                 onClick={() => handleSelectRole('host')}
+                style={{ padding: '6px 8px' }}
               >
                 <Mic size={14} />
                 <div style={{ textAlign: 'left' }}>
-                  <div style={{ fontWeight: 700, fontSize: '0.75rem' }}>Host Studio</div>
-                  <div style={{ fontSize: '0.62rem', opacity: 0.7 }}>Live Recording Suite</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.7rem' }}>Host Studio</div>
+                  <div style={{ fontSize: '0.58rem', opacity: 0.7 }}>Recording Suite</div>
                 </div>
               </button>
             </div>
@@ -247,7 +262,14 @@ export const LoginPage: React.FC = () => {
                 <span>Authenticating...</span>
               ) : (
                 <>
-                  <span>Sign In as {selectedRole === 'admin' ? 'Admin' : 'Host'}</span>
+                  <span>
+                    Sign In as{' '}
+                    {selectedRole === 'superadmin'
+                      ? 'Super Admin'
+                      : selectedRole === 'admin'
+                      ? 'Studio Admin'
+                      : 'Host'}
+                  </span>
                   <ArrowRight size={16} />
                 </>
               )}

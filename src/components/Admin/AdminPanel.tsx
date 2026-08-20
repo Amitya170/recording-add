@@ -66,7 +66,7 @@ import {
 } from '../../auth/GoogleDriveUploader';
 
 export const AdminPanel: React.FC = () => {
-  const { getAllUsers, createHostAccount, deleteUser, updateUser, currentUser, logout } = useAuth();
+  const { getAllUsers, getHostsForAdmin, createHostAccount, deleteUser, updateUser, currentUser, logout } = useAuth();
 
   const [activeTab, setActiveTab] = useState<'overview' | 'sessions' | 'users' | 'cloud'>('overview');
   const [userReports, setUserReports] = useState<UserDurationReport[]>([]);
@@ -165,13 +165,14 @@ export const AdminPanel: React.FC = () => {
   } | null>(null);
 
   const refreshData = useCallback(() => {
-    const allUsers = getAllUsers();
-    const reports = getUserDurationReports(allUsers);
+    const adminId = currentUser?.id;
+    const hosts = getHostsForAdmin(adminId);
+    const reports = getUserDurationReports(hosts, adminId);
     setUserReports(reports);
-    const sess = getStoredSessions();
+    const sess = getStoredSessions(adminId);
     setSessions(sess);
-    setSummary(getAnalyticsSummary(allUsers.length));
-  }, [getAllUsers]);
+    setSummary(getAnalyticsSummary(hosts.length, adminId));
+  }, [getHostsForAdmin, currentUser]);
 
   useEffect(() => {
     refreshData();
@@ -590,8 +591,17 @@ export const AdminPanel: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <Shield size={24} className="daw-logo-icon" />
             <div>
-              <h1 className="daw-title" style={{ fontSize: '1.15rem' }}>ADMIN CREATOR CONSOLE</h1>
-              <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>System Intelligence, Studio Sessions & User Governance</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <h1 className="daw-title" style={{ fontSize: '1.15rem' }}>ADMIN CREATOR CONSOLE</h1>
+                {currentUser?.organizationName && (
+                  <span className="daw-badge" style={{ color: 'var(--accent-cyan)', borderColor: 'rgba(0, 240, 255, 0.4)', background: 'rgba(0, 240, 255, 0.08)' }}>
+                    🏢 {currentUser.organizationName}
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
+                Dedicated Studio Intelligence & Isolated Host Management
+              </div>
             </div>
           </div>
 

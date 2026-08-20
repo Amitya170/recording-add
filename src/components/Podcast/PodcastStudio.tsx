@@ -568,6 +568,8 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         hostId: currentUser?.id || 'usr_host',
         hostName: hostDisplayNameRef.current || currentUser?.name || 'Sarah Connor (Host)',
         hostEmail: currentUser?.email || 'host@studio.local',
+        adminId: currentUser?.adminId || 'usr_admin1',
+        organizationName: currentUser?.organizationName,
         guestName: guestDisplayNameRef.current || 'Guest Speaker',
         title: `Podcast Session ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
         durationSeconds: calculatedDuration,
@@ -662,7 +664,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         console.error('Failed saving session audio blob:', err);
       }
     }
-  }, [currentUser?.id, currentUser?.email, currentUser?.name]);
+  }, [currentUser?.id, currentUser?.email, currentUser?.name, currentUser?.adminId, currentUser?.organizationName]);
 
   const handleAddMarker = useCallback((time: number) => {
     setMarkers((prev) => [

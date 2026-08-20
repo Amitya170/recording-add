@@ -12,6 +12,8 @@ export interface CueMarkerItem {
 
 export interface RecordingSession {
   id: string;
+  adminId?: string; // The Admin ID who manages this Host
+  organizationName?: string; // Agency or Studio group name
   hostId: string;
   hostName: string;
   hostEmail: string;
@@ -42,6 +44,8 @@ export interface UserDurationReport {
   userId: string;
   userName: string;
   userEmail: string;
+  adminId?: string;
+  organizationName?: string;
   role: string;
   totalSessions: number;
   totalDurationSeconds: number;
@@ -57,10 +61,12 @@ export interface AnalyticsSummary {
 
 const SESSIONS_KEY = 'podcast_studio_sessions_log';
 
-export function getStoredSessions(): RecordingSession[] {
+export function getStoredSessions(adminId?: string): RecordingSession[] {
   try {
     const raw = localStorage.getItem(SESSIONS_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const list: RecordingSession[] = raw ? JSON.parse(raw) : [];
+    if (!adminId) return list;
+    return list.filter((s) => s.adminId === adminId || (!s.adminId && adminId === 'usr_admin1'));
   } catch {
     return [];
   }
@@ -114,8 +120,8 @@ export function formatDuration(totalSeconds: number): string {
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 }
 
-export function getAnalyticsSummary(allUsersCount: number): AnalyticsSummary {
-  const sessions = getStoredSessions();
+export function getAnalyticsSummary(allUsersCount: number, adminId?: string): AnalyticsSummary {
+  const sessions = getStoredSessions(adminId);
   const totalSessions = sessions.length;
   const totalDurationSeconds = sessions.reduce((acc, s) => acc + (s.durationSeconds || 0), 0);
   const avgDurationSeconds = totalSessions > 0 ? totalDurationSeconds / totalSessions : 0;
@@ -128,10 +134,13 @@ export function getAnalyticsSummary(allUsersCount: number): AnalyticsSummary {
   };
 }
 
-export function getUserDurationReports(allUsers: any[]): UserDurationReport[] {
+export function getUserDurationReports(allUsers: any[], adminId?: string): UserDurationReport[] {
   const sessions = getStoredSessions();
+  const filteredUsers = adminId
+    ? allUsers.filter((u) => u.adminId === adminId || (!u.adminId && adminId === 'usr_admin1'))
+    : allUsers;
 
-  return allUsers.map((user) => {
+  return filteredUsers.map((user) => {
     const userEmail = (user.email || '').toLowerCase().trim();
     const userName = (user.name || '').toLowerCase().trim();
     const userId = user.id;
@@ -155,6 +164,8 @@ export function getUserDurationReports(allUsers: any[]): UserDurationReport[] {
       userId: user.id,
       userName: user.name,
       userEmail: user.email,
+      adminId: user.adminId,
+      organizationName: user.organizationName,
       role: user.role || 'host',
       totalSessions: userSessions.length,
       totalDurationSeconds,
