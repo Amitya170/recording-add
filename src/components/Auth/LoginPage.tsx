@@ -84,60 +84,81 @@ export const LoginPage: React.FC = () => {
             Capture crystal-clear 32-bit Float stems, collaborate seamlessly with remote guests over ultra-low latency WebRTC, and master with hardware-accelerated DSP in real time.
           </p>
 
-          {/* 4 Feature Value Pillars */}
-          <div className="hero-features-grid">
-            <div className="hero-feature-card">
-              <div className="hero-feature-icon cyan">
-                <Mic size={18} />
+          {/* Live Studio Hardware & Signal Chain Showcase */}
+          <div className="hero-rack-deck">
+            {/* Top Telemetry Header */}
+            <div className="rack-deck-head">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span className="live-rec-dot" />
+                <span style={{ fontWeight: 800, fontSize: '0.72rem', letterSpacing: '0.5px' }}>LIVE STUDIO SIGNAL CHAIN</span>
               </div>
-              <div>
-                <h4>Dual-Stem Isolation</h4>
-                <p>Discrete Host & Guest tracks for clean stereo mixing.</p>
+              <span className="daw-badge" style={{ color: 'var(--accent-cyan)' }}>48 kHz / 32-BIT FLOAT</span>
+            </div>
+
+            {/* Dual Channel Live VU Meters */}
+            <div className="rack-channels-container">
+              {/* Channel 1: Host */}
+              <div className="rack-channel-strip">
+                <div className="rack-chan-label">
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Mic size={13} color="var(--accent-cyan)" /> CH 1 • HOST MICROPHONE
+                  </span>
+                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)', fontSize: '0.68rem' }}>-5.4 dBFS PEAK</span>
+                </div>
+                <div className="rack-meter-bar">
+                  <div className="rack-meter-fill fill-host" />
+                </div>
+              </div>
+
+              {/* Channel 2: Remote Guest */}
+              <div className="rack-channel-strip">
+                <div className="rack-chan-label">
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Radio size={13} color="var(--accent-amber)" /> CH 2 • REMOTE GUEST P2P
+                  </span>
+                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-amber)', fontSize: '0.68rem' }}>-8.1 dBFS PEAK</span>
+                </div>
+                <div className="rack-meter-bar">
+                  <div className="rack-meter-fill fill-guest" />
+                </div>
               </div>
             </div>
 
-            <div className="hero-feature-card">
-              <div className="hero-feature-icon purple">
-                <Zap size={18} />
+            {/* DSP Signal Processors Matrix */}
+            <div className="rack-dsp-matrix">
+              <div className="rack-dsp-badge">
+                <Zap size={11} color="var(--accent-cyan)" />
+                <span>AudioWorklet 64-Bit</span>
               </div>
-              <div>
-                <h4>AudioWorklet DSP</h4>
-                <p>Thread-isolated 64-bit engine with zero audio dropouts.</p>
+              <div className="rack-dsp-badge">
+                <Shield size={11} color="var(--accent-green)" />
+                <span>Parametric 3-Band EQ</span>
               </div>
-            </div>
-
-            <div className="hero-feature-card">
-              <div className="hero-feature-icon green">
-                <Shield size={18} />
+              <div className="rack-dsp-badge">
+                <Sparkles size={11} color="var(--accent-amber)" />
+                <span>Spectral Noise Gate</span>
               </div>
-              <div>
-                <h4>Parametric EQ & Gate</h4>
-                <p>Live 3-band vocal sculpting & spectral noise suppression.</p>
-              </div>
-            </div>
-
-            <div className="hero-feature-card">
-              <div className="hero-feature-icon amber">
-                <FolderSync size={18} />
-              </div>
-              <div>
-                <h4>Google Drive Sync</h4>
-                <p>Instant automated cloud archiving without API keys.</p>
+              <div className="rack-dsp-badge">
+                <FolderSync size={11} color="#c084fc" />
+                <span>Google Drive Sync</span>
               </div>
             </div>
           </div>
 
           {/* Harmonic Waveform Soundbars Animation */}
           <div className="hero-soundbars-wrap">
-            <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>AUDIO SIGNAL: 48 kHz / 32-BIT FLOAT</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>PCM MASTER SPECTRUM</span>
+              <span style={{ fontSize: '0.62rem', color: 'var(--accent-green)', fontWeight: 700 }}>● DSP REAL-TIME</span>
+            </div>
             <div className="hero-soundbars">
-              {Array.from({ length: 24 }).map((_, idx) => (
+              {Array.from({ length: 28 }).map((_, idx) => (
                 <div
                   key={idx}
                   className="hero-soundbar"
                   style={{
-                    animationDuration: `${0.6 + (idx % 5) * 0.25}s`,
-                    animationDelay: `${idx * 0.05}s`,
+                    animationDuration: `${0.5 + (idx % 6) * 0.2}s`,
+                    animationDelay: `${idx * 0.04}s`,
                   }}
                 />
               ))}
