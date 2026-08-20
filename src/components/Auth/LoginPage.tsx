@@ -5,8 +5,8 @@ import { ThemeToggle } from '../Common/ThemeToggle';
 
 export const LoginPage: React.FC = () => {
   const { login } = useAuth();
-  const [email, setEmail] = useState('admin@studio.local');
-  const [password, setPassword] = useState('admin123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [selectedRole, setSelectedRole] = useState<'admin' | 'host'>('admin');
   const [error, setError] = useState('');
@@ -16,13 +16,6 @@ export const LoginPage: React.FC = () => {
   const handleSelectRole = (role: 'admin' | 'host') => {
     setSelectedRole(role);
     setError('');
-    if (role === 'admin') {
-      setEmail('admin@studio.local');
-      setPassword('admin123');
-    } else {
-      setEmail('host@studio.local');
-      setPassword('host123');
-    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -165,11 +158,11 @@ export const LoginPage: React.FC = () => {
                 Studio Sign In
               </h2>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                Select your studio workspace role or enter credentials
+                Select your workspace and enter your credentials
               </p>
             </div>
 
-            {/* Fast 1-Click Role Switcher */}
+            {/* Role Switcher */}
             <div className="role-switch-pills">
               <button
                 type="button"
@@ -213,7 +206,7 @@ export const LoginPage: React.FC = () => {
                   id="login-email"
                   type="email"
                   className="auth-text-input"
-                  placeholder="name@studio.local"
+                  placeholder="Enter your email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   autoComplete="email"
@@ -231,7 +224,7 @@ export const LoginPage: React.FC = () => {
                   id="login-password"
                   type={showPassword ? 'text' : 'password'}
                   className="auth-text-input"
-                  placeholder="••••••••"
+                  placeholder="Enter your password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   autoComplete="current-password"
@@ -254,32 +247,11 @@ export const LoginPage: React.FC = () => {
                 <span>Authenticating...</span>
               ) : (
                 <>
-                  <span>Enter {selectedRole === 'admin' ? 'Admin Console' : 'Host Studio'}</span>
+                  <span>Sign In as {selectedRole === 'admin' ? 'Admin' : 'Host'}</span>
                   <ArrowRight size={16} />
                 </>
               )}
             </button>
-
-            {/* Demo Quick Fill Footnote */}
-            <div className="demo-credentials-tray">
-              <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>Quick Demo Sign-In:</span>
-              <div style={{ display: 'flex', gap: '6px' }}>
-                <button
-                  type="button"
-                  className="demo-chip-btn"
-                  onClick={() => handleSelectRole('admin')}
-                >
-                  admin@studio.local
-                </button>
-                <button
-                  type="button"
-                  className="demo-chip-btn"
-                  onClick={() => handleSelectRole('host')}
-                >
-                  host@studio.local
-                </button>
-              </div>
-            </div>
           </form>
         </div>
       </div>
