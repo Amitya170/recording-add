@@ -197,6 +197,23 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     };
   }, [handleDeviceChange, sessionToken]);
 
+  // Global interaction audio unlocker for remote host stream (prevents browser autoplay silence)
+  useEffect(() => {
+    const unlockAudio = () => {
+      if (remoteAudioRef.current && remoteAudioRef.current.paused && remoteAudioRef.current.srcObject) {
+        remoteAudioRef.current.play().catch(() => {});
+      }
+    };
+    window.addEventListener('click', unlockAudio);
+    window.addEventListener('touchstart', unlockAudio);
+    window.addEventListener('keydown', unlockAudio);
+    return () => {
+      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+      window.removeEventListener('keydown', unlockAudio);
+    };
+  }, []);
+
   // Visualizer Tick
   useEffect(() => {
     let animId: number;

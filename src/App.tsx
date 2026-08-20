@@ -10,35 +10,53 @@ import { GuestStudioView } from './components/Podcast/GuestStudioView';
 import { ScrollControls } from './components/Common/ScrollControls';
 import './styles/daw-theme.css';
 
+const getInitialUrlParams = () => {
+  if (typeof window === 'undefined') {
+    return {
+      inviteToken: null as string | null,
+      guestNameParam: undefined as string | undefined,
+      hostNameParam: undefined as string | undefined,
+      sessionToken: 'podcast_main_session',
+      isGuestSession: false,
+    };
+  }
+  const params = new URLSearchParams(window.location.search);
+  const invite = params.get('invite');
+  const guest = params.get('guest');
+  const host = params.get('host');
+  const session = params.get('session');
+
+  // If there's a guest query param OR a specific session token in URL (not invite registration)
+  const isGuestSession = Boolean(guest || (session && session !== 'podcast_main_session' && !invite));
+  return {
+    inviteToken: invite || null,
+    guestNameParam: guest || (session ? 'Guest Speaker' : undefined),
+    hostNameParam: host || undefined,
+    sessionToken: session || 'podcast_main_session',
+    isGuestSession,
+  };
+};
+
 const AppRouter: React.FC = () => {
   const { isAuthenticated, isSuperAdmin, isAdmin, currentUser } = useAuth();
-  const [inviteToken, setInviteToken] = useState<string | null>(null);
-  const [guestNameParam, setGuestNameParam] = useState<string | undefined>(undefined);
-  const [hostNameParam, setHostNameParam] = useState<string | undefined>(undefined);
-  const [sessionToken, setSessionToken] = useState<string>('podcast_main_session');
+  const [urlParams, setUrlParams] = useState(getInitialUrlParams);
 
-  // Check URL parameters for invites or guest session links
+  // Keep in sync with popstate or search params changes
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const token = params.get('invite');
-    if (token) {
-      setInviteToken(token);
-    }
-    const guest = params.get('guest');
-    const host = params.get('host');
-    const sess = params.get('session');
-    if (guest) setGuestNameParam(guest);
-    if (host) setHostNameParam(host);
-    if (sess) setSessionToken(sess);
+    const handlePopState = () => {
+      setUrlParams(getInitialUrlParams());
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
   // Invite Token Registration Page
-  if (inviteToken) {
+  if (urlParams.inviteToken) {
     return (
       <RegisterPage
-        inviteToken={inviteToken}
+        inviteToken={urlParams.inviteToken}
         onRegistered={() => {
-          setInviteToken(null);
+          setUrlParams((prev) => ({ ...prev, inviteToken: null }));
           window.history.replaceState({}, '', window.location.pathname);
         }}
       />
@@ -46,8 +64,15 @@ const AppRouter: React.FC = () => {
   }
 
   // Guest Link Access (Activated on Guest Invite Link)
-  if (guestNameParam) {
-    return <GuestStudioView guestNameParam={guestNameParam} hostNameParam={hostNameParam} sessionToken={sessionToken} />;
+  // If the user arrived via invite link, route them directly into GuestStudioView
+  if (urlParams.isGuestSession && (!isAuthenticated || currentUser?.role === 'user' || urlParams.guestNameParam)) {
+    return (
+      <GuestStudioView
+        guestNameParam={urlParams.guestNameParam}
+        hostNameParam={urlParams.hostNameParam}
+        sessionToken={urlParams.sessionToken}
+      />
+    );
   }
 
   // Unauthenticated → Login Page
@@ -67,11 +92,11 @@ const AppRouter: React.FC = () => {
 
   // Guest Role → Dedicated Guest Console View
   if (currentUser?.role === 'user') {
-    return <GuestStudioView guestNameParam={currentUser.name} sessionToken={sessionToken} />;
+    return <GuestStudioView guestNameParam={currentUser.name} sessionToken={urlParams.sessionToken} />;
   }
 
   // Host Role → Full Podcast Recording Studio DAW
-  return <PodcastStudio sessionToken={sessionToken} />;
+  return <PodcastStudio sessionToken={urlParams.sessionToken} />;
 };
 
 export const App: React.FC = () => {

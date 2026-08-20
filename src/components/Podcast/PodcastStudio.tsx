@@ -134,6 +134,34 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     return `session_${safeKey}_${Date.now().toString(36)}`;
   });
 
+  // Sync studioSessionToken with URL search params so page refresh preserves active room
+  useEffect(() => {
+    if (studioSessionToken && typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get('session') !== studioSessionToken) {
+        url.searchParams.set('session', studioSessionToken);
+        window.history.replaceState({}, '', url.toString());
+      }
+    }
+  }, [studioSessionToken]);
+
+  // Global interaction audio unlocker for remote guest stream (prevents browser autoplay silence)
+  useEffect(() => {
+    const unlockAudio = () => {
+      if (remoteAudioRef.current && remoteAudioRef.current.paused && remoteAudioRef.current.srcObject) {
+        remoteAudioRef.current.play().catch(() => {});
+      }
+    };
+    window.addEventListener('click', unlockAudio);
+    window.addEventListener('touchstart', unlockAudio);
+    window.addEventListener('keydown', unlockAudio);
+    return () => {
+      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+      window.removeEventListener('keydown', unlockAudio);
+    };
+  }, []);
+
   useEffect(() => {
     const checkWebhook = () => {
       setIsWebhookConfigured(Boolean(getGoogleDriveWebhookUrl()));
