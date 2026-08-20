@@ -144,20 +144,28 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     }
   }, [studioSessionToken]);
 
-  // Global interaction audio unlocker for remote guest stream (prevents browser autoplay silence)
+  // Global interaction audio unlocker (required for Mobile iOS Safari & Android Chrome)
   useEffect(() => {
-    const unlockAudio = () => {
-      if (remoteAudioRef.current && remoteAudioRef.current.paused && remoteAudioRef.current.srcObject) {
-        remoteAudioRef.current.play().catch(() => {});
+    const unlockAllAudio = async () => {
+      // 1. Resume AudioContexts if suspended by browser
+      if (engineA.current?.audioContext?.state === 'suspended') {
+        try { await engineA.current.audioContext.resume(); } catch {}
+      }
+      if (engineB.current?.audioContext?.state === 'suspended') {
+        try { await engineB.current.audioContext.resume(); } catch {}
+      }
+      // 2. Play remote audio element
+      if (remoteAudioRef.current && remoteAudioRef.current.srcObject) {
+        try { await remoteAudioRef.current.play(); } catch {}
       }
     };
-    window.addEventListener('click', unlockAudio);
-    window.addEventListener('touchstart', unlockAudio);
-    window.addEventListener('keydown', unlockAudio);
+    window.addEventListener('click', unlockAllAudio);
+    window.addEventListener('touchstart', unlockAllAudio);
+    window.addEventListener('keydown', unlockAllAudio);
     return () => {
-      window.removeEventListener('click', unlockAudio);
-      window.removeEventListener('touchstart', unlockAudio);
-      window.removeEventListener('keydown', unlockAudio);
+      window.removeEventListener('click', unlockAllAudio);
+      window.removeEventListener('touchstart', unlockAllAudio);
+      window.removeEventListener('keydown', unlockAllAudio);
     };
   }, []);
 
@@ -1296,12 +1304,20 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         />
       )}
 
-      {/* Hidden Live WebRTC Remote Guest Audio Element for Bi-Directional Call Playback */}
+      {/* Live WebRTC Remote Guest Audio Element for Bi-Directional Call Playback (Mobile WebKit safe) */}
       <audio
         ref={remoteAudioRef}
         autoPlay
         playsInline
-        style={{ display: 'none' }}
+        style={{
+          position: 'fixed',
+          top: '-9999px',
+          left: '-9999px',
+          width: '1px',
+          height: '1px',
+          opacity: 0.001,
+          pointerEvents: 'none',
+        }}
       />
 
       {/* Real-Time Google Drive Upload Progress Banner */}

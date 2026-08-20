@@ -110,14 +110,20 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     const rEngine = new WebRTCAudioEngine('guest', sessionToken || 'podcast_main_session');
     rEngine.onStatusChange = (st) => setWebrtcStatus(st);
     rEngine.onRemoteStream = async (remoteStream) => {
-      // PRIMARY playback path: audio element for reliable cross-browser playback
+      console.log('[GuestStudio] Received host remote stream:', remoteStream.id, 'tracks:', remoteStream.getAudioTracks().length);
+      // PRIMARY playback path: audio element for reliable cross-browser & mobile playback
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
         remoteAudioRef.current.volume = 1.0;
         remoteAudioRef.current.muted = false;
-        remoteAudioRef.current.play().catch((e) => console.warn('Guest autoplay prevented:', e));
+        try {
+          await remoteAudioRef.current.play();
+          console.log('[GuestStudio] Host audio playback started');
+        } catch (e) {
+          console.warn('[GuestStudio] Autoplay prevented, waiting for touch/click interaction:', e);
+        }
       }
-      // SECONDARY: connect to engine for waveform metering only (no speaker output)
+      // SECONDARY: connect to engine for waveform metering
       if (engineHostIncoming.current) {
         await engineHostIncoming.current.startMediaStream(remoteStream);
       }
@@ -165,17 +171,15 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     const setup = async () => {
       const ctx = await engine.init(undefined, 44100);
       await eHost.init(ctx, 44100);
-      // Now engines are ready: refresh devices (will trigger mic selection)
       await refreshDevices();
 
-      // If mic was already selected before engines were ready, retry stream attachment
       const existingStream = engine.mediaStream;
       if (existingStream && rEngine) {
         try {
           await rEngine.setLocalStream(existingStream);
-          console.log('[Guest] Deferred local stream set on WebRTC engine after init');
+          console.log('[Guest] Local stream attached to WebRTC');
         } catch (e) {
-          console.warn('[Guest] Deferred setLocalStream failed:', e);
+          console.warn('[Guest] setLocalStream failed:', e);
         }
       }
     };
@@ -201,20 +205,28 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     };
   }, [handleDeviceChange, sessionToken]);
 
-  // Global interaction audio unlocker for remote host stream (prevents browser autoplay silence)
+  // Global interaction audio unlocker (required for Mobile iOS Safari & Android Chrome)
   useEffect(() => {
-    const unlockAudio = () => {
-      if (remoteAudioRef.current && remoteAudioRef.current.paused && remoteAudioRef.current.srcObject) {
-        remoteAudioRef.current.play().catch(() => {});
+    const unlockAllAudio = async () => {
+      // 1. Resume AudioContexts if suspended by mobile browser power-saver
+      if (engineGuest.current?.audioContext?.state === 'suspended') {
+        try { await engineGuest.current.audioContext.resume(); } catch {}
+      }
+      if (engineHostIncoming.current?.audioContext?.state === 'suspended') {
+        try { await engineHostIncoming.current.audioContext.resume(); } catch {}
+      }
+      // 2. Play remote audio element
+      if (remoteAudioRef.current && remoteAudioRef.current.srcObject) {
+        try { await remoteAudioRef.current.play(); } catch {}
       }
     };
-    window.addEventListener('click', unlockAudio);
-    window.addEventListener('touchstart', unlockAudio);
-    window.addEventListener('keydown', unlockAudio);
+    window.addEventListener('click', unlockAllAudio);
+    window.addEventListener('touchstart', unlockAllAudio);
+    window.addEventListener('keydown', unlockAllAudio);
     return () => {
-      window.removeEventListener('click', unlockAudio);
-      window.removeEventListener('touchstart', unlockAudio);
-      window.removeEventListener('keydown', unlockAudio);
+      window.removeEventListener('click', unlockAllAudio);
+      window.removeEventListener('touchstart', unlockAllAudio);
+      window.removeEventListener('keydown', unlockAllAudio);
     };
   }, []);
 
@@ -477,12 +489,20 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
         </div>
       </main>
 
-      {/* Hidden Live WebRTC Remote Host Audio Element */}
+      {/* Live WebRTC Remote Host Audio Element (Mobile WebKit & Safari safe) */}
       <audio
         ref={remoteAudioRef}
         autoPlay
         playsInline
-        style={{ display: 'none' }}
+        style={{
+          position: 'fixed',
+          top: '-9999px',
+          left: '-9999px',
+          width: '1px',
+          height: '1px',
+          opacity: 0.001,
+          pointerEvents: 'none',
+        }}
       />
 
       {/* Modals */}

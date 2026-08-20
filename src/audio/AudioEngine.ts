@@ -60,8 +60,15 @@ export class SpeakerAudioEngine {
       this.ctx = sharedCtx;
     } else {
       const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      this.ctx = new AudioCtx({ sampleRate });
-      if (this.ctx.state === 'suspended') await this.ctx.resume();
+      try {
+        this.ctx = new AudioCtx({ sampleRate });
+      } catch {
+        // Fallback to native hardware sampleRate for iOS Safari / Mobile browsers
+        this.ctx = new AudioCtx();
+      }
+      if (this.ctx.state === 'suspended') {
+        try { await this.ctx.resume(); } catch {}
+      }
     }
 
     // Try loading AudioWorklet processor module
@@ -93,25 +100,33 @@ export class SpeakerAudioEngine {
       this.stream.getTracks().forEach((t) => t.stop());
     }
 
+    const hasSpecificDevice = Boolean(deviceId && deviceId.trim() !== '' && deviceId !== 'default');
+
     const constraints: MediaStreamConstraints = {
-      audio: {
-        deviceId: deviceId ? { ideal: deviceId } : undefined,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: false,
-      },
+      audio: hasSpecificDevice
+        ? {
+            deviceId: { ideal: deviceId },
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          }
+        : {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
       video: false,
     };
 
     try {
       this.stream = await navigator.mediaDevices.getUserMedia(constraints);
     } catch (err) {
-      console.warn('Ideal device constraint failed, falling back to default mic:', err);
+      console.warn('Microphone constraints failed, falling back to default mic:', err);
       this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     }
 
     if (this.ctx.state === 'suspended') {
-      await this.ctx.resume();
+      try { await this.ctx.resume(); } catch {}
     }
 
     if (this.sourceNode) this.sourceNode.disconnect();
