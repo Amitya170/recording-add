@@ -285,10 +285,10 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     };
     webrtcEngine.current = rEngine;
 
-    // Host mic: no self monitor. Guest incoming: monitorOutput=false because we use
-    // the audio element for playback (prevents double audio path causing noise/echo).
+    // Host mic: no self monitor (prevents hearing own voice).
+    // Guest incoming: monitorOutput=true so host hears guest live in real-time like a call meeting.
     const eA = new SpeakerAudioEngine('Speaker A (Host)', false);
-    const eB = new SpeakerAudioEngine('Speaker B (Guest)', false);
+    const eB = new SpeakerAudioEngine('Speaker B (Guest)', true);
     engineA.current = eA;
     engineB.current = eB;
 
