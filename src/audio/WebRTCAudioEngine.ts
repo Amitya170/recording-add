@@ -360,7 +360,8 @@ export class WebRTCAudioEngine {
   }
 
   private attemptGuestCall() {
-    if (!this.peer || this.peer.destroyed || this.isDisposed) return;
+    if (!this.peer || this.peer.destroyed || this.isDisposed || this.isConnecting) return;
+    this.isConnecting = true;
 
     const hostId = `pcs_host_${this.sessionToken}`;
     console.log('[WebRTC] Guest: connecting to host ID:', hostId);

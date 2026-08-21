@@ -20,7 +20,7 @@ import {
   Clock,
 } from 'lucide-react';
 import { useAuth } from '../../auth/AuthContext';
-import { saveRecordingSession, updateSessionDriveStatus, getActiveHostSessionToken, rotateHostSessionToken } from '../../auth/SessionStore';
+import { saveRecordingSession, updateSessionDriveStatus, getActiveHostSessionToken } from '../../auth/SessionStore';
 import { saveSessionAudioBlobs } from '../../auth/CloudAudioStore';
 import {
   getPendingRecoverySession,

@@ -21,7 +21,6 @@ export const GuestInviteModal: React.FC<GuestInviteModalProps> = ({
   const [inviteLink, setInviteLink] = useState('');
   const [inviteId, setInviteId] = useState('');
   const [copied, setCopied] = useState(false);
-  const [copiedPublic, setCopiedPublic] = useState(false);
 
   const safeHost = (hostName || 'host').toLowerCase().replace(/[^a-z0-9]/g, '_');
 
@@ -65,13 +64,8 @@ export const GuestInviteModal: React.FC<GuestInviteModalProps> = ({
     const textToCopy = customText || inviteLink;
     if (!textToCopy) return;
     navigator.clipboard.writeText(textToCopy);
-    if (customText) {
-      setCopiedPublic(true);
-      setTimeout(() => setCopiedPublic(false), 2000);
-    } else {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const handleSendEmail = () => {
