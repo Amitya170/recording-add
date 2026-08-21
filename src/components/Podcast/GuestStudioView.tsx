@@ -117,6 +117,9 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
         remoteAudioRef.current.srcObject = remoteStream;
         remoteAudioRef.current.volume = 1.0;
         remoteAudioRef.current.muted = false;
+        remoteAudioRef.current.oncanplay = () => {
+          remoteAudioRef.current?.play().catch((e) => console.warn('[GuestStudio] oncanplay play error:', e));
+        };
         try {
           await remoteAudioRef.current.play();
           console.log('[GuestStudio] Host audio playback started');
