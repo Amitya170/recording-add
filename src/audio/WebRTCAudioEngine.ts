@@ -82,23 +82,15 @@ const STUN_SERVERS: RTCIceServer[] = [
 // ──────────────────────────────────────────────────────────────
 let cachedIceServers: RTCIceServer[] | null = null;
 
+const DEFAULT_METERED_APP_NAME = 'amitya';
+const DEFAULT_METERED_API_KEY = '0e01ebea1f2f07f3375ea87d3093ba05d791';
+
 async function fetchIceServers(): Promise<RTCIceServer[]> {
   // Return cached result if we already fetched
   if (cachedIceServers) return cachedIceServers;
 
-  const apiKey = (import.meta as any).env?.VITE_METERED_API_KEY as string | undefined;
-  const appName = ((import.meta as any).env?.VITE_METERED_APP_NAME as string | undefined) || 'recording';
-
-  if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') {
-    console.warn(
-      '[WebRTC] No VITE_METERED_API_KEY found — TURN relay disabled.\n' +
-      'Cross-network connections (different cities/ISPs) will likely FAIL.\n' +
-      'Get a free API key at https://dashboard.metered.ca/signup and add\n' +
-      'VITE_METERED_API_KEY=your_key to your .env file.'
-    );
-    cachedIceServers = STUN_SERVERS;
-    return cachedIceServers;
-  }
+  const apiKey = ((import.meta as any).env?.VITE_METERED_API_KEY as string | undefined) || DEFAULT_METERED_API_KEY;
+  const appName = ((import.meta as any).env?.VITE_METERED_APP_NAME as string | undefined) || DEFAULT_METERED_APP_NAME;
 
   try {
     const resp = await fetch(
@@ -106,9 +98,9 @@ async function fetchIceServers(): Promise<RTCIceServer[]> {
     );
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const meteredServers: RTCIceServer[] = await resp.json();
-    // Combine: STUN fleet + Metered TURN servers
+    // Combine: STUN fleet + Metered TURN servers (UDP + TCP + TLS Port 443)
     cachedIceServers = [...STUN_SERVERS, ...meteredServers];
-    console.log('[WebRTC] TURN credentials fetched from Metered.ca:', meteredServers.length, 'servers');
+    console.log('[WebRTC] Live TURN credentials successfully loaded from Metered.ca:', meteredServers.length, 'relay servers active');
     return cachedIceServers;
   } catch (e) {
     console.error('[WebRTC] Failed to fetch TURN credentials from Metered.ca:', e);
