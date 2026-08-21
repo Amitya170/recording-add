@@ -5,7 +5,9 @@
  *
  * Key Architecture:
  * 1. Deterministic host ID based on session token: `pcs_host_<sessionToken>`
- * 2. High-reliability ICE servers (Google STUN + Metered OpenRelay STUN/TURN) for full NAT/firewall traversal.
+ * 2. Dynamic TURN credentials fetched from Metered.ca free API (20GB/month free relay)
+ *    + Google/Cloudflare STUN fleet for direct connections.
+ *    Set VITE_METERED_API_KEY in .env — without it, cross-network calls WILL fail.
  * 3. Dual channel:
  *    - DataConnection: Immediate handshake, keepalive & control signals.
  *    - MediaConnection: Full-duplex live microphone audio stream.
@@ -53,30 +55,67 @@ function getEnsuredAudioStream(stream: MediaStream | null): MediaStream {
   }
 }
 
-const ICE_SERVERS: RTCIceServer[] = [
-  // 1. Google Global STUN Fleet
+// ──────────────────────────────────────────────────────────────
+// STUN-only fallback (always available, no credentials needed)
+// ──────────────────────────────────────────────────────────────
+const STUN_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:stun2.l.google.com:19302' },
   { urls: 'stun:stun3.l.google.com:19302' },
   { urls: 'stun:stun4.l.google.com:19302' },
-  // 2. Cloudflare STUN
   { urls: 'stun:stun.cloudflare.com:3478' },
-  // 3. Metered OpenRelay STUN & TURN Relays (UDP + TCP + TLS Port 443/5349 for Symmetric NAT & Cellular Traversal)
-  { urls: 'stun:stun.relay.metered.ca:80' },
-  { urls: 'stun:stun.relay.metered.ca:443' },
-  {
-    urls: [
-      'turn:openrelay.metered.ca:80',
-      'turn:openrelay.metered.ca:443',
-      'turn:openrelay.metered.ca:443?transport=tcp',
-      'turns:openrelay.metered.ca:443?transport=tcp',
-      'turns:openrelay.metered.ca:5349',
-    ],
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
 ];
+
+// ──────────────────────────────────────────────────────────────
+// Dynamic TURN credential fetching via Metered.ca free API
+// (20 GB free relay traffic per month — required for cross-network/city connections)
+//
+// Set these in your .env to enable TURN relay:
+//   VITE_METERED_API_KEY=your_api_key_here
+//   VITE_METERED_APP_NAME=your_app_name  (optional, defaults to 'recording')
+//
+// Steps:
+//   1. Sign up free at https://dashboard.metered.ca/signup
+//   2. Create an app, copy the API Key and App Name
+//   3. Create .env in project root with the values above
+// ──────────────────────────────────────────────────────────────
+let cachedIceServers: RTCIceServer[] | null = null;
+
+async function fetchIceServers(): Promise<RTCIceServer[]> {
+  // Return cached result if we already fetched
+  if (cachedIceServers) return cachedIceServers;
+
+  const apiKey = (import.meta as any).env?.VITE_METERED_API_KEY as string | undefined;
+  const appName = ((import.meta as any).env?.VITE_METERED_APP_NAME as string | undefined) || 'recording';
+
+  if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') {
+    console.warn(
+      '[WebRTC] No VITE_METERED_API_KEY found — TURN relay disabled.\n' +
+      'Cross-network connections (different cities/ISPs) will likely FAIL.\n' +
+      'Get a free API key at https://dashboard.metered.ca/signup and add\n' +
+      'VITE_METERED_API_KEY=your_key to your .env file.'
+    );
+    cachedIceServers = STUN_SERVERS;
+    return cachedIceServers;
+  }
+
+  try {
+    const resp = await fetch(
+      `https://${appName}.metered.live/api/v1/turn/credentials?apiKey=${apiKey}`
+    );
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const meteredServers: RTCIceServer[] = await resp.json();
+    // Combine: STUN fleet + Metered TURN servers
+    cachedIceServers = [...STUN_SERVERS, ...meteredServers];
+    console.log('[WebRTC] TURN credentials fetched from Metered.ca:', meteredServers.length, 'servers');
+    return cachedIceServers;
+  } catch (e) {
+    console.error('[WebRTC] Failed to fetch TURN credentials from Metered.ca:', e);
+    cachedIceServers = STUN_SERVERS;
+    return cachedIceServers;
+  }
+}
 
 export class WebRTCAudioEngine {
   private peer: Peer | null = null;
@@ -109,7 +148,7 @@ export class WebRTCAudioEngine {
   // PeerJS initialisation
   // ──────────────────────────────────────────────────────────────
 
-  private initPeer() {
+  private async initPeer() {
     if (this.isDisposed) return;
 
     const peerId = this.role === 'host'
@@ -120,12 +159,15 @@ export class WebRTCAudioEngine {
       ? 'Waiting for Guest to Join…'
       : 'Connecting to Host Studio Room…');
 
+    // Fetch TURN credentials dynamically (cached after first call)
+    const iceServers = await fetchIceServers();
+
     try {
       this.peer = new Peer(peerId as string, {
         debug: 1,
         pingInterval: 5000, // WebSocket ping every 5s to keep signaling connection active indefinitely
         config: {
-          iceServers: ICE_SERVERS,
+          iceServers,
           sdpSemantics: 'unified-plan',
           iceTransportPolicy: 'all',
           bundlePolicy: 'max-bundle',
@@ -305,6 +347,14 @@ export class WebRTCAudioEngine {
           this.handleRemoteStream(stream);
         };
 
+        // Log ICE candidate types for NAT traversal diagnostics
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            const c = event.candidate;
+            console.log(`[WebRTC] Host ICE candidate: type=${c.type} protocol=${c.protocol} address=${c.address}:${c.port}`);
+          }
+        };
+
         pc.oniceconnectionstatechange = () => {
           console.log('[WebRTC] Host ICE state:', pc.iceConnectionState);
           if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
@@ -440,6 +490,14 @@ export class WebRTCAudioEngine {
           this.isConnecting = false;
           this.stopGuestCallLoop();
           this.handleRemoteStream(stream);
+        };
+
+        // Log ICE candidate types for NAT traversal diagnostics
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            const c = event.candidate;
+            console.log(`[WebRTC] Guest ICE candidate: type=${c.type} protocol=${c.protocol} address=${c.address}:${c.port}`);
+          }
         };
 
         pc.oniceconnectionstatechange = () => {
