@@ -274,9 +274,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
           console.warn('[Host] Remote audio playback autoplay prevented:', e);
         }
       }
-      // SECONDARY path: engine for waveform visualizer & PCM recording only (no speaker output)
+      // SECONDARY path: engine for waveform visualizer & PCM recording
       if (engineB.current) {
-        await engineB.current.startMediaStream(remoteStream);
+        await engineB.current.startMediaStream(remoteStream, remoteAudioRef.current);
         setIsConnectedB(true);
         if (isRecordingRef.current) {
           engineB.current.startRecording();
@@ -311,8 +311,8 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     };
 
     const setup = async () => {
-      const ctx = await eA.init(undefined, 44100);
-      await eB.init(ctx, 44100);
+      const ctx = await eA.init();
+      await eB.init(ctx);
       await refreshDevices();
 
       // If mic was auto-selected before engines were ready, retry stream attachment
@@ -379,7 +379,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
           }
         }
         if (engineB.current) {
-          await engineB.current.startMediaStream(remoteStream);
+          await engineB.current.startMediaStream(remoteStream, remoteAudioRef.current);
           setIsConnectedB(true);
           if (isRecordingRef.current) {
             engineB.current.startRecording();

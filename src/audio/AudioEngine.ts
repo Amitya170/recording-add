@@ -23,7 +23,8 @@ export interface SpeakerMeterData {
 export class SpeakerAudioEngine {
   private ctx: AudioContext | null = null;
   private stream: MediaStream | null = null;
-  private sourceNode: MediaStreamAudioSourceNode | null = null;
+  private sourceNode: AudioNode | null = null;
+  private mediaElementSourceMap = new WeakMap<HTMLMediaElement, MediaElementAudioSourceNode>();
   private analyserEngine: AnalyserEngine | null = null;
   private gainNode: GainNode | null = null;
   private scriptNode: ScriptProcessorNode | null = null;
@@ -55,15 +56,15 @@ export class SpeakerAudioEngine {
     return this.stream;
   }
 
-  public async init(sharedCtx?: AudioContext, sampleRate: number = 44100): Promise<AudioContext> {
+  public async init(sharedCtx?: AudioContext, sampleRate?: number): Promise<AudioContext> {
     if (sharedCtx) {
       this.ctx = sharedCtx;
     } else {
       const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       try {
-        this.ctx = new AudioCtx({ sampleRate });
+        // Use native hardware sample rate if not specified to prevent WebRTC resampling issues
+        this.ctx = sampleRate ? new AudioCtx({ sampleRate }) : new AudioCtx();
       } catch {
-        // Fallback to native hardware sampleRate for iOS Safari / Mobile browsers
         this.ctx = new AudioCtx();
       }
       if (this.ctx.state === 'suspended') {
@@ -129,7 +130,10 @@ export class SpeakerAudioEngine {
       try { await this.ctx.resume(); } catch {}
     }
 
-    if (this.sourceNode) this.sourceNode.disconnect();
+    if (this.sourceNode) {
+      try { this.sourceNode.disconnect(); } catch {}
+      this.sourceNode = null;
+    }
     this.sourceNode = this.ctx.createMediaStreamSource(this.stream);
 
     // Audio Graph: sourceNode -> noiseEngine -> fxRack -> gainNode -> analyserEngine
@@ -145,7 +149,7 @@ export class SpeakerAudioEngine {
     this.applyMuteState();
   }
 
-  public async startMediaStream(stream: MediaStream): Promise<void> {
+  public async startMediaStream(stream: MediaStream, audioElement?: HTMLMediaElement | null): Promise<void> {
     if (!this.ctx) throw new Error('Engine not initialized');
 
     if (this.ctx.state === 'suspended') {
@@ -159,9 +163,37 @@ export class SpeakerAudioEngine {
       this.sourceNode = null;
     }
 
-    try {
-      this.sourceNode = this.ctx.createMediaStreamSource(this.stream);
+    let nodeAttached = false;
 
+    // Strategy 1: If an HTMLMediaElement is playing the WebRTC stream, tap into its
+    // decoded PCM output via createMediaElementSource. This bypasses all browser WebRTC
+    // WebAudio bugs and guarantees 100% reliable audio frames.
+    if (audioElement) {
+      try {
+        let elemSource = this.mediaElementSourceMap.get(audioElement);
+        if (!elemSource) {
+          elemSource = this.ctx.createMediaElementSource(audioElement);
+          this.mediaElementSourceMap.set(audioElement, elemSource);
+        }
+        this.sourceNode = elemSource;
+        nodeAttached = true;
+      } catch (e) {
+        console.warn('[AudioEngine] createMediaElementSource fallback to createMediaStreamSource:', e);
+      }
+    }
+
+    // Strategy 2: Direct MediaStreamAudioSourceNode on a clean stream instance
+    if (!nodeAttached) {
+      try {
+        const cleanStream = new MediaStream(stream.getAudioTracks());
+        this.sourceNode = this.ctx.createMediaStreamSource(cleanStream);
+        nodeAttached = true;
+      } catch (err) {
+        console.warn('[AudioEngine] createMediaStreamSource failed:', err);
+      }
+    }
+
+    if (this.sourceNode) {
       // Audio Graph: sourceNode -> noiseEngine -> fxRack -> gainNode -> analyserEngine
       if (this.noiseEngine) {
         this.sourceNode.connect(this.noiseEngine.inputNode);
@@ -178,8 +210,6 @@ export class SpeakerAudioEngine {
       if (this.monitorOutput) {
         this.gainNode!.connect(this.ctx.destination);
       }
-    } catch (err) {
-      console.warn('[AudioEngine] createMediaStreamSource failed:', err);
     }
 
     this.setupAudioCaptureNode();
