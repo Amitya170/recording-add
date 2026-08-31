@@ -153,9 +153,9 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     webrtcEngine.current = rEngine;
 
     // Guest own mic: no monitor (prevents hearing own voice).
-    // Host incoming: monitorOutput=true so guest hears host live in real-time like a call meeting.
+    // Host incoming: remoteAudioRef handles playback directly to prevent AEC echo cancellation suppression.
     const engine = new SpeakerAudioEngine('Guest Speaker', false);
-    const eHost = new SpeakerAudioEngine('Host Speaker (Incoming)', true);
+    const eHost = new SpeakerAudioEngine('Host Speaker (Incoming)', false);
     engineGuest.current = engine;
     engineHostIncoming.current = eHost;
 

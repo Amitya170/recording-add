@@ -624,27 +624,38 @@ export class WebRTCAudioEngine {
     console.log(`[WebRTC] ${this.role} setLocalStream with track:`, audioTrack?.label);
 
     if (!audioTrack) return;
+    audioTrack.enabled = true;
 
     // Skip if this exact local track is already attached
     if (this.lastLocalTrackId === audioTrack.id) return;
     this.lastLocalTrackId = audioTrack.id;
 
-    let trackReplaced = false;
-    if (this.mediaConn) {
+    const replaceSenders = async () => {
+      if (!this.mediaConn) return false;
       const pc = (this.mediaConn as unknown as { peerConnection?: RTCPeerConnection }).peerConnection;
       if (pc) {
         const senders = pc.getSenders();
         const audioSenders = senders.filter((s) => !s.track || s.track.kind === 'audio');
+        let replaced = false;
         for (const sender of audioSenders) {
           try {
             await sender.replaceTrack(audioTrack);
-            trackReplaced = true;
-            console.log(`[WebRTC] ${this.role} replaced active audio track with live mic`);
+            replaced = true;
+            console.log(`[WebRTC] ${this.role} replaced active audio track with live mic:`, audioTrack.label);
           } catch (e) {
             console.warn('[WebRTC] replaceTrack error:', e);
           }
         }
+        return replaced;
       }
+      return false;
+    };
+
+    const immediateSuccess = await replaceSenders();
+    // In case SDP negotiation was still in-flight, retry after short intervals
+    if (!immediateSuccess) {
+      setTimeout(replaceSenders, 400);
+      setTimeout(replaceSenders, 1200);
     }
 
     // Send track update signal over data connection
@@ -652,7 +663,7 @@ export class WebRTCAudioEngine {
 
     // If Guest and not connected or in progress, initiate call
     if (this.role === 'guest' && this.peer && !this.peer.destroyed && !this.isDisposed) {
-      if (!this.isConnected && !this.isConnecting && (!this.mediaConn || !trackReplaced)) {
+      if (!this.isConnected && !this.isConnecting && (!this.mediaConn || !immediateSuccess)) {
         console.log('[WebRTC] Guest: initiating call with live microphone stream…');
         this.attemptGuestCall();
       }
