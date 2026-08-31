@@ -131,9 +131,6 @@ export class WebRTCAudioEngine {
   private lastLocalTrackId: string | null = null;
   private lastRemoteTrackId: string | null = null;
 
-  private consecutiveFailures: number = 0;
-  private static readonly MAX_FAILURES_BEFORE_REBUILD = 3;
-
   private guestRetryBackoffMs: number = 3000;
   private static readonly GUEST_RETRY_MIN_MS = 3000;
   private static readonly GUEST_RETRY_MAX_MS = 12000;
@@ -192,7 +189,6 @@ export class WebRTCAudioEngine {
 
     this.peer.on('open', (id) => {
       console.log(`[WebRTC] ${this.role} online on signaling broker — peer ID: ${id}`);
-      this.consecutiveFailures = 0;
       this.guestRetryBackoffMs = WebRTCAudioEngine.GUEST_RETRY_MIN_MS;
       if (this.role === 'host') {
         this.updateStatus('Studio Room Ready ✓ — Waiting for Guest to Join…');
@@ -214,29 +210,23 @@ export class WebRTCAudioEngine {
           }
           break;
         case 'peer-unavailable':
-          // [FIX 6] Don't schedule a separate setTimeout retry here — the
-          // serialized guest call loop already handles retries with backoff.
-          // The old code had both a setTimeout(3000) here AND a setInterval(5000)
-          // in startGuestCallLoop, causing overlapping call attempts.
-          this.updateStatus('Waiting for Host to be online in studio… (Retrying)', false);
+          // Host is not online yet or in the process of starting up.
+          // Keep the guest's Peer socket alive and let the call loop retry cleanly without destroying the peer.
+          this.updateStatus('Waiting for Host to be online in studio…', false);
           this.isConnecting = false;
-          this.consecutiveFailures++;
-          this.checkEscalatingReconnect();
           break;
         case 'network':
         case 'disconnected':
         case 'server-error':
+        case 'socket-error':
+        case 'socket-closed':
           this.updateStatus('Signaling reconnecting…');
           this.isConnecting = false;
-          this.consecutiveFailures++;
           try { this.peer?.reconnect(); } catch {}
-          this.checkEscalatingReconnect();
           break;
         default:
           this.updateStatus(`Connecting (${err.type})…`);
           this.isConnecting = false;
-          this.consecutiveFailures++;
-          this.checkEscalatingReconnect();
       }
     });
 
@@ -248,33 +238,6 @@ export class WebRTCAudioEngine {
         this.scheduleReconnect(3000);
       }
     });
-  }
-
-  // ──────────────────────────────────────────────────────────────
-  // [FIX 5] Escalating Reconnect — Full Peer Rebuild After N Failures
-  // When the signaling server silently drops the websocket or TURN
-  // credentials have expired, simply retrying the same connection
-  // never works. After 3 consecutive failures, destroy everything
-  // and rebuild with freshly fetched TURN credentials.
-  // ──────────────────────────────────────────────────────────────
-
-  private checkEscalatingReconnect() {
-    if (this.isDisposed || this.isConnected) return;
-    if (this.consecutiveFailures >= WebRTCAudioEngine.MAX_FAILURES_BEFORE_REBUILD) {
-      console.warn(`[WebRTC] ${this.role}: ${this.consecutiveFailures} consecutive failures — rebuilding peer with fresh TURN credentials`);
-      this.consecutiveFailures = 0;
-      this.guestRetryBackoffMs = WebRTCAudioEngine.GUEST_RETRY_MIN_MS;
-      this.stopGuestCallLoop();
-      if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
-      this.reconnectTimeout = setTimeout(() => {
-        if (this.isDisposed || this.isConnected) return;
-        try { this.peer?.destroy(); } catch {}
-        this.peer = null;
-        this.initPeer(true); // forceNewCredentials = true
-      }, 1500);
-    } else {
-      this.scheduleReconnect(Math.min(5000, 2000 + this.consecutiveFailures * 1000));
-    }
   }
 
   // ──────────────────────────────────────────────────────────────
@@ -320,10 +283,7 @@ export class WebRTCAudioEngine {
       console.log(`[WebRTC] ${label}: ICE restart offer applied — waiting for new candidates`);
     } catch (e) {
       console.warn(`[WebRTC] ${label}: ICE restart SDP renegotiation failed:`, e);
-      // Fall back to full peer rebuild
-      this.handleDisconnect(`Connection interrupted — rebuilding…`);
-      this.consecutiveFailures = WebRTCAudioEngine.MAX_FAILURES_BEFORE_REBUILD;
-      this.checkEscalatingReconnect();
+      this.handleDisconnect(`Connection interrupted — waiting for recovery…`);
     }
   }
 
@@ -349,7 +309,6 @@ export class WebRTCAudioEngine {
       console.log(`[WebRTC] ${label} ICE state: ${state}`);
 
       if (state === 'connected' || state === 'completed') {
-        this.consecutiveFailures = 0;
         this.updateStatus(
           this.role === 'host' ? 'Guest Connected ✓ (Audio Live)' : 'Connected to Host ✓ (Audio Live)',
           true
@@ -385,8 +344,7 @@ export class WebRTCAudioEngine {
     pc.onconnectionstatechange = () => {
       console.log(`[WebRTC] ${label} connection state: ${pc.connectionState}`);
       if (pc.connectionState === 'failed') {
-        this.consecutiveFailures++;
-        this.checkEscalatingReconnect();
+        this.handleDisconnect('P2P connection interrupted — retrying…');
       }
     };
   }
@@ -416,7 +374,6 @@ export class WebRTCAudioEngine {
 
     this.remoteStream = stream;
     this.isConnected = true;
-    this.consecutiveFailures = 0; // Reset on successful stream
     console.log(`[WebRTC] ${this.role}: remote live audio stream attached (tracks: ${tracks.length}, forced: ${forceRefresh})`);
 
     const statusMsg = this.role === 'host'
@@ -547,8 +504,6 @@ export class WebRTCAudioEngine {
 
   public retryConnection() {
     console.log(`[WebRTC] Manual retry triggered for ${this.role}`);
-    // Reset backoff on manual retry
-    this.consecutiveFailures = 0;
     this.guestRetryBackoffMs = WebRTCAudioEngine.GUEST_RETRY_MIN_MS;
     if (this.role === 'guest') {
       this.isConnecting = false;
@@ -572,11 +527,9 @@ export class WebRTCAudioEngine {
     if (this.connectionWatchdog) clearTimeout(this.connectionWatchdog);
     this.connectionWatchdog = setTimeout(() => {
       if (!this.isConnected && !this.isDisposed) {
-        console.log('[WebRTC] Guest: connection attempt timed out — scheduling retry with backoff');
+        console.log('[WebRTC] Guest: connection attempt timed out — retrying…');
         this.isConnecting = false;
-        this.consecutiveFailures++;
         this.increaseGuestBackoff();
-        this.checkEscalatingReconnect();
       }
     }, 8000);
 
@@ -588,7 +541,6 @@ export class WebRTCAudioEngine {
     conn.on('open', () => {
       console.log('[WebRTC] Guest: data channel OPEN with host');
       this.isConnecting = false;
-      this.consecutiveFailures = 0;
       this.guestRetryBackoffMs = WebRTCAudioEngine.GUEST_RETRY_MIN_MS;
       this.stopGuestCallLoop();
       this.updateStatus('Connected to Host ✓ (P2P Call Active)', true);
@@ -629,7 +581,6 @@ export class WebRTCAudioEngine {
 
       call.on('stream', (remoteStream) => {
         this.isConnecting = false;
-        this.consecutiveFailures = 0;
         this.stopGuestCallLoop();
         this.handleRemoteStream(remoteStream);
       });
@@ -639,7 +590,6 @@ export class WebRTCAudioEngine {
         pc.ontrack = (event) => {
           const stream = event.streams[0] || new MediaStream([event.track]);
           this.isConnecting = false;
-          this.consecutiveFailures = 0;
           this.stopGuestCallLoop();
           this.handleRemoteStream(stream);
         };
