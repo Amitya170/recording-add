@@ -149,7 +149,7 @@ export class SpeakerAudioEngine {
     if (!this.ctx) throw new Error('Engine not initialized');
 
     if (this.ctx.state === 'suspended') {
-      await this.ctx.resume();
+      try { await this.ctx.resume(); } catch {}
     }
 
     this.stream = stream;
@@ -159,12 +159,11 @@ export class SpeakerAudioEngine {
       this.sourceNode = null;
     }
 
-    this.sourceNode = this.ctx.createMediaStreamSource(this.stream);
-    this.sourceNode.connect(this.gainNode!);
-    this.gainNode!.connect(this.analyserEngine!.node);
-
-    if (this.monitorOutput) {
-      this.gainNode!.connect(this.ctx.destination);
+    try {
+      this.sourceNode = this.ctx.createMediaStreamSource(this.stream);
+      this.sourceNode.connect(this.gainNode!);
+    } catch (err) {
+      console.warn('[AudioEngine] createMediaStreamSource failed:', err);
     }
 
     this.setupAudioCaptureNode();
