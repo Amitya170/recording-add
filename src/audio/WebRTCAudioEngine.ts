@@ -141,9 +141,9 @@ export class WebRTCAudioEngine {
   private isDisposed = false;
   private isConnecting = false;
 
-  // [FIX 1] Properly declared class property — was previously referenced
-  // but undeclared, causing TypeScript errors and silent runtime crashes in retry logic.
-  private lastAttachedTrackId: string | null = null;
+  // Track IDs for local and remote streams (kept separate so they don't overwrite each other)
+  private lastLocalTrackId: string | null = null;
+  private lastRemoteTrackId: string | null = null;
 
   // [FIX 5] Escalating reconnect counter — after 3 consecutive failures,
   // destroys entire Peer and fetches fresh TURN credentials.
@@ -417,15 +417,15 @@ export class WebRTCAudioEngine {
   // Remote Stream Handler (Deduplicated)
   // ──────────────────────────────────────────────────────────────
 
-  private handleRemoteStream(stream: MediaStream) {
+  private handleRemoteStream(stream: MediaStream, forceRefresh: boolean = false) {
     if (this.isDisposed) return;
     const tracks = stream.getAudioTracks();
     if (tracks.length === 0) return;
 
-    // Deduplicate: skip if we already attached this exact track
+    // Deduplicate only when not forcing a refresh
     const newTrackId = tracks[0].id;
-    if (this.lastAttachedTrackId === newTrackId && this.isConnected) return;
-    this.lastAttachedTrackId = newTrackId;
+    if (!forceRefresh && this.lastRemoteTrackId === newTrackId && this.isConnected) return;
+    this.lastRemoteTrackId = newTrackId;
 
     tracks.forEach((t) => {
       t.enabled = true;
@@ -439,7 +439,7 @@ export class WebRTCAudioEngine {
     this.remoteStream = stream;
     this.isConnected = true;
     this.consecutiveFailures = 0; // Reset on successful stream
-    console.log(`[WebRTC] ${this.role}: remote live audio stream attached, tracks: ${tracks.length}`);
+    console.log(`[WebRTC] ${this.role}: remote live audio stream attached (tracks: ${tracks.length}, forced: ${forceRefresh})`);
 
     const statusMsg = this.role === 'host'
       ? 'Guest Connected ✓ (Audio Live)'
@@ -473,9 +473,9 @@ export class WebRTCAudioEngine {
       conn.on('data', (data: any) => {
         if (data?.type === '__ping__') return; // ignore internal keepalive
         if (data?.type === '__TRACK_UPDATED__') {
-          console.log('[WebRTC] Host: guest updated audio track — refreshing playback');
+          console.log('[WebRTC] Host: guest updated audio track — refreshing playback & capture');
           if (this.remoteStream) {
-            this.handleRemoteStream(this.remoteStream);
+            this.handleRemoteStream(this.remoteStream, true);
           }
           return;
         }
@@ -574,7 +574,8 @@ export class WebRTCAudioEngine {
     this.guestRetryBackoffMs = WebRTCAudioEngine.GUEST_RETRY_MIN_MS;
     if (this.role === 'guest') {
       this.isConnecting = false;
-      this.lastAttachedTrackId = null;
+      this.lastLocalTrackId = null;
+      this.lastRemoteTrackId = null;
       this.stopGuestCallLoop();
       this.attemptGuestCall();
     } else {
@@ -632,7 +633,7 @@ export class WebRTCAudioEngine {
 
     conn.on('close', () => {
       this.isConnecting = false;
-      this.lastAttachedTrackId = null;
+      this.lastRemoteTrackId = null;
       this.handleDisconnect('Host disconnected — retrying…');
       this.startGuestCallLoop();
     });
@@ -674,7 +675,7 @@ export class WebRTCAudioEngine {
 
       call.on('close', () => {
         this.isConnecting = false;
-        this.lastAttachedTrackId = null;
+        this.lastRemoteTrackId = null;
         this.handleDisconnect('Host audio stream closed');
       });
 
@@ -700,9 +701,9 @@ export class WebRTCAudioEngine {
 
     if (!audioTrack) return;
 
-    // Skip if this exact track is already attached
-    if (this.lastAttachedTrackId === audioTrack.id) return;
-    this.lastAttachedTrackId = audioTrack.id;
+    // Skip if this exact local track is already attached
+    if (this.lastLocalTrackId === audioTrack.id) return;
+    this.lastLocalTrackId = audioTrack.id;
 
     let trackReplaced = false;
     if (this.mediaConn) {

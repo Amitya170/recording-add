@@ -161,7 +161,15 @@ export class SpeakerAudioEngine {
 
     try {
       this.sourceNode = this.ctx.createMediaStreamSource(this.stream);
-      this.sourceNode.connect(this.gainNode!);
+
+      // Audio Graph: sourceNode -> noiseEngine -> fxRack -> gainNode -> analyserEngine
+      if (this.noiseEngine) {
+        this.sourceNode.connect(this.noiseEngine.inputNode);
+      } else if (this.fxRack) {
+        this.sourceNode.connect(this.fxRack.inputNode);
+      } else {
+        this.sourceNode.connect(this.gainNode!);
+      }
 
       // Re-establish analyser connection for metering & waveform visualization
       this.gainNode!.connect(this.analyserEngine!.node);
@@ -195,6 +203,11 @@ export class SpeakerAudioEngine {
       this.silentSink = null;
     }
 
+    // Always create a silent sink gain node to drive the Web Audio render clock
+    this.silentSink = this.ctx.createGain();
+    this.silentSink.gain.value = 0;
+    this.silentSink.connect(this.ctx.destination);
+
     // Try AudioWorklet thread isolation first
     if (this.isWorkletActive) {
       try {
@@ -213,6 +226,8 @@ export class SpeakerAudioEngine {
         };
 
         this.gainNode.connect(this.workletNode);
+        // Connect to silent sink so the browser audio graph pulls samples through worklet
+        this.workletNode.connect(this.silentSink);
         return;
       } catch (err) {
         console.warn('AudioWorkletNode instantiation failed, using ScriptProcessor fallback:', err);
@@ -245,11 +260,7 @@ export class SpeakerAudioEngine {
     };
 
     this.gainNode.connect(this.scriptNode);
-
-    this.silentSink = this.ctx.createGain();
-    this.silentSink.gain.value = 0;
     this.scriptNode.connect(this.silentSink);
-    this.silentSink.connect(this.ctx.destination);
   }
 
   public setNoiseSuppression(enabled: boolean): void {
