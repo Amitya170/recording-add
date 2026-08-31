@@ -162,6 +162,14 @@ export class SpeakerAudioEngine {
     try {
       this.sourceNode = this.ctx.createMediaStreamSource(this.stream);
       this.sourceNode.connect(this.gainNode!);
+
+      // Re-establish analyser connection for metering & waveform visualization
+      this.gainNode!.connect(this.analyserEngine!.node);
+
+      // If monitoring is enabled (e.g. for remote guest audio), connect to speakers
+      if (this.monitorOutput) {
+        this.gainNode!.connect(this.ctx.destination);
+      }
     } catch (err) {
       console.warn('[AudioEngine] createMediaStreamSource failed:', err);
     }
