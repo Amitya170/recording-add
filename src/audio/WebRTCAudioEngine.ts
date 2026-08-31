@@ -28,7 +28,9 @@ export interface WebRTCStatus {
 }
 
 function safePeerId(raw: string): string {
-  return raw.toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 40);
+  // Strictly alphanumeric to guarantee 100% compliance with PeerJS ID validation regex
+  const clean = (raw || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 32);
+  return clean || 'default';
 }
 
 /**
@@ -70,22 +72,6 @@ const STUN_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.cloudflare.com:3478' },
 ];
 
-// ──────────────────────────────────────────────────────────────
-// Dynamic TURN credential fetching via Metered.ca free API
-// (20 GB free relay traffic per month — required for cross-network/city connections)
-//
-// Set these in your .env to enable TURN relay:
-//   VITE_METERED_API_KEY=your_api_key_here
-//   VITE_METERED_APP_NAME=your_app_name  (optional, defaults to 'recording')
-//
-// Steps:
-//   1. Sign up free at https://dashboard.metered.ca/signup
-//   2. Create an app, copy the API Key and App Name
-//   3. Create .env in project root with the values above
-// ──────────────────────────────────────────────────────────────
-
-// [FIX 2] TURN credential cache with TTL — re-fetches when older than 6 hours
-// to prevent stale relay tokens from silently killing cross-network connections.
 let cachedIceServers: RTCIceServer[] | null = null;
 let cachedIceTimestamp: number = 0;
 const ICE_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
@@ -94,7 +80,6 @@ const DEFAULT_METERED_APP_NAME = 'amitya';
 const DEFAULT_METERED_API_KEY = '0e01ebea1f2f07f3375ea87d3093ba05d791';
 
 async function fetchIceServers(forceRefresh: boolean = false): Promise<RTCIceServer[]> {
-  // Return cached result if still valid (within TTL)
   const now = Date.now();
   if (!forceRefresh && cachedIceServers && (now - cachedIceTimestamp) < ICE_CACHE_TTL_MS) {
     return cachedIceServers;
@@ -104,21 +89,23 @@ async function fetchIceServers(forceRefresh: boolean = false): Promise<RTCIceSer
   const appName = ((import.meta as any).env?.VITE_METERED_APP_NAME as string | undefined) || DEFAULT_METERED_APP_NAME;
 
   try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000); // 3s timeout
+
     const resp = await fetch(
-      `https://${appName}.metered.live/api/v1/turn/credentials?apiKey=${apiKey}`
+      `https://${appName}.metered.live/api/v1/turn/credentials?apiKey=${apiKey}`,
+      { signal: controller.signal }
     );
+    clearTimeout(timer);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const meteredServers: RTCIceServer[] = await resp.json();
-    // Combine: STUN fleet + Metered TURN servers (UDP + TCP + TLS Port 443)
     cachedIceServers = [...STUN_SERVERS, ...meteredServers];
     cachedIceTimestamp = now;
-    console.log('[WebRTC] Live TURN credentials successfully loaded from Metered.ca:', meteredServers.length, 'relay servers active');
+    console.log('[WebRTC] Live TURN credentials loaded from Metered.ca:', meteredServers.length, 'relay servers active');
     return cachedIceServers;
   } catch (e) {
-    console.error('[WebRTC] Failed to fetch TURN credentials from Metered.ca:', e);
-    // On failure, use stale cache if available, otherwise STUN-only
+    console.warn('[WebRTC] Metered.ca TURN fetch unavailable (using STUN fleet):', e);
     if (cachedIceServers && cachedIceServers.length > STUN_SERVERS.length) {
-      console.warn('[WebRTC] Using stale TURN credentials as fallback');
       return cachedIceServers;
     }
     cachedIceServers = STUN_SERVERS;
@@ -141,20 +128,15 @@ export class WebRTCAudioEngine {
   private isDisposed = false;
   private isConnecting = false;
 
-  // Track IDs for local and remote streams (kept separate so they don't overwrite each other)
   private lastLocalTrackId: string | null = null;
   private lastRemoteTrackId: string | null = null;
 
-  // [FIX 5] Escalating reconnect counter — after 3 consecutive failures,
-  // destroys entire Peer and fetches fresh TURN credentials.
   private consecutiveFailures: number = 0;
   private static readonly MAX_FAILURES_BEFORE_REBUILD = 3;
 
-  // [FIX 6] Serialized guest retry — prevents overlapping call attempts
-  // that put PeerJS signaling into an inconsistent state.
   private guestRetryBackoffMs: number = 3000;
   private static readonly GUEST_RETRY_MIN_MS = 3000;
-  private static readonly GUEST_RETRY_MAX_MS = 15000;
+  private static readonly GUEST_RETRY_MAX_MS = 12000;
 
   public role: 'host' | 'guest';
   public isConnected: boolean = false;
@@ -162,7 +144,7 @@ export class WebRTCAudioEngine {
   public onRemoteStream?: (stream: MediaStream) => void;
   public onSignal?: (message: any) => void;
 
-  constructor(role: 'host' | 'guest', sessionToken: string = 'podcast_default_session') {
+  constructor(role: 'host' | 'guest', sessionToken: string = 'podcastdefaultsession') {
     this.role = role;
     this.sessionToken = safePeerId(sessionToken);
     this.initPeer();
@@ -175,28 +157,25 @@ export class WebRTCAudioEngine {
   private async initPeer(forceNewCredentials: boolean = false) {
     if (this.isDisposed) return;
 
+    // Explicit deterministic Peer ID for Host and unique alphanumeric Peer ID for Guest
     const peerId = this.role === 'host'
-      ? `pcs_host_${this.sessionToken}`
-      : undefined;
+      ? `pcshost${this.sessionToken}`
+      : `pcsguest${this.sessionToken}${Math.random().toString(36).slice(2, 8)}`;
 
     this.updateStatus(this.role === 'host'
       ? 'Waiting for Guest to Join…'
       : 'Connecting to Host Studio Room…');
 
-    // Fetch TURN credentials dynamically (TTL-cached, force refresh when rebuilding)
     const iceServers = await fetchIceServers(forceNewCredentials);
 
-    // [FIX 3] Explicit PeerJS server configuration for reliable signaling.
-    // The default PeerJS cloud server is used but with explicit parameters
-    // and increased connection reliability settings.
     try {
-      this.peer = new Peer(peerId as string, {
+      this.peer = new Peer(peerId, {
         host: '0.peerjs.com',
         port: 443,
         secure: true,
         path: '/',
         debug: 1,
-        pingInterval: 5000, // WebSocket ping every 5s to keep signaling connection active indefinitely
+        pingInterval: 5000,
         config: {
           iceServers,
           sdpSemantics: 'unified-plan',
@@ -207,13 +186,12 @@ export class WebRTCAudioEngine {
       });
     } catch (e) {
       console.error('[WebRTC] Peer creation error:', e);
-      this.scheduleReconnect(4000);
+      this.scheduleReconnect(3000);
       return;
     }
 
     this.peer.on('open', (id) => {
       console.log(`[WebRTC] ${this.role} online on signaling broker — peer ID: ${id}`);
-      // Reset failure counter on successful signaling connection
       this.consecutiveFailures = 0;
       this.guestRetryBackoffMs = WebRTCAudioEngine.GUEST_RETRY_MIN_MS;
       if (this.role === 'host') {
@@ -584,16 +562,13 @@ export class WebRTCAudioEngine {
   }
 
   private attemptGuestCall() {
-    // [FIX 6] Guard against overlapping calls — the old code allowed
-    // multiple simultaneous call attempts which broke PeerJS state.
-    if (!this.peer || this.peer.destroyed || this.isDisposed || this.isConnecting) return;
+    if (!this.peer || this.peer.destroyed || this.isDisposed || this.isConnecting || this.isConnected) return;
     this.isConnecting = true;
 
-    const hostId = `pcs_host_${this.sessionToken}`;
+    const hostId = `pcshost${this.sessionToken}`;
     console.log('[WebRTC] Guest: connecting to host ID:', hostId);
 
-    // Watchdog: If connection doesn't open within 8s (increased from 4.5s for
-    // cross-network latency), reset state and increase backoff for next retry
+    // Watchdog: If connection doesn't open within 8s, reset state and retry with backoff
     if (this.connectionWatchdog) clearTimeout(this.connectionWatchdog);
     this.connectionWatchdog = setTimeout(() => {
       if (!this.isConnected && !this.isDisposed) {
@@ -659,7 +634,6 @@ export class WebRTCAudioEngine {
         this.handleRemoteStream(remoteStream);
       });
 
-      // [FIX 4 + FIX 7] Attach unified ICE diagnostics with proper restart
       const pc = (call as any).peerConnection as RTCPeerConnection;
       if (pc) {
         pc.ontrack = (event) => {
@@ -726,11 +700,10 @@ export class WebRTCAudioEngine {
     // Send track update signal over data connection
     this.sendSignal({ type: '__TRACK_UPDATED__', timestamp: Date.now() });
 
-    // If Guest and not connected or track replacement was not possible, initiate/refresh call
+    // If Guest and not connected or in progress, initiate call
     if (this.role === 'guest' && this.peer && !this.peer.destroyed && !this.isDisposed) {
-      if (!this.isConnected || !this.mediaConn || !trackReplaced) {
+      if (!this.isConnected && !this.isConnecting && (!this.mediaConn || !trackReplaced)) {
         console.log('[WebRTC] Guest: initiating call with live microphone stream…');
-        this.isConnecting = false;
         this.attemptGuestCall();
       }
     }
