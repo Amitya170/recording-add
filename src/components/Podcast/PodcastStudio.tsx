@@ -255,6 +255,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       setWebrtcStatus(st);
       if (st.connected) {
         setIsConnectedB(true);
+        if (engineA.current?.mediaStream) {
+          rEngine.setLocalStream(engineA.current.mediaStream).catch(() => {});
+        }
       }
     };
     rEngine.onRemoteStream = async (remoteStream) => {
@@ -875,6 +878,8 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
   return (
     <div className="daw-container">
+      {/* Hidden audio element for decoding WebRTC remote guest audio stream */}
+      <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
       {/* Session Crash Recovery Banner */}
       {recoveryData && (
         <div style={{ background: 'linear-gradient(90deg, #ff2a5f, #ffb700)', padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: '#fff', fontWeight: 600, fontSize: '0.8rem' }}>

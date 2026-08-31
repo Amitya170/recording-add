@@ -157,39 +157,37 @@ export class SpeakerAudioEngine {
 
     this.stream = stream;
 
+    // Ensure all audio tracks are explicitly enabled
+    const tracks = stream.getAudioTracks();
+    tracks.forEach((t) => {
+      t.enabled = true;
+    });
+
     if (this.sourceNode) {
       try { this.sourceNode.disconnect(); } catch {}
       this.sourceNode = null;
     }
 
-    let nodeAttached = false;
-
-    // Direct MediaStreamAudioSourceNode on a clean stream instance
-    // Using a new MediaStream instance prevents browser bugs related to track state caching
-    if (!nodeAttached) {
+    if (tracks.length > 0) {
       try {
-        const cleanStream = new MediaStream(stream.getAudioTracks());
+        const cleanStream = new MediaStream(tracks);
         this.sourceNode = this.ctx.createMediaStreamSource(cleanStream);
-        nodeAttached = true;
       } catch (err) {
-        console.error('[AudioEngine] createMediaStreamSource failed (WebRTC track may be broken):', err);
+        console.error('[AudioEngine] createMediaStreamSource on cleanStream failed, trying raw stream:', err);
+        try {
+          this.sourceNode = this.ctx.createMediaStreamSource(stream);
+        } catch (e) {
+          console.error('[AudioEngine] createMediaStreamSource failed completely:', e);
+        }
       }
     }
 
     if (this.sourceNode) {
-      // Audio Graph: sourceNode -> noiseEngine -> fxRack -> gainNode -> analyserEngine
-      if (this.noiseEngine) {
-        this.sourceNode.connect(this.noiseEngine.inputNode);
-      } else if (this.fxRack) {
-        this.sourceNode.connect(this.fxRack.inputNode);
-      } else {
-        this.sourceNode.connect(this.gainNode!);
-      }
-
-      // Re-establish analyser connection for metering & waveform visualization
+      // Connect directly to gainNode for zero-latency, high-fidelity monitoring & visualizer response
+      this.sourceNode.connect(this.gainNode!);
       this.gainNode!.connect(this.analyserEngine!.node);
 
-      // If monitoring is enabled (e.g. for remote guest audio), connect to speakers
+      // If monitoring is enabled (e.g. for remote guest audio), connect to speakers/headphones
       if (this.monitorOutput) {
         this.gainNode!.connect(this.ctx.destination);
       }

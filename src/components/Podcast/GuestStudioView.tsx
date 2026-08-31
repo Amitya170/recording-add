@@ -109,7 +109,12 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     // IMPORTANT: Create the WebRTC engine FIRST (synchronously) so it is
     // ready when handleDeviceChange fires from refreshDevices() below.
     const rEngine = new WebRTCAudioEngine('guest', sessionToken || 'podcast_main_session');
-    rEngine.onStatusChange = (st) => setWebrtcStatus(st);
+    rEngine.onStatusChange = (st) => {
+      setWebrtcStatus(st);
+      if (st.connected && engineGuest.current?.mediaStream) {
+        rEngine.setLocalStream(engineGuest.current.mediaStream).catch(() => {});
+      }
+    };
     rEngine.onRemoteStream = async (remoteStream) => {
       console.log('[GuestStudio] Received host remote stream:', remoteStream.id, 'tracks:', remoteStream.getAudioTracks().length);
       // PRIMARY playback path: audio element for reliable cross-browser & mobile playback
@@ -330,6 +335,8 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
 
   return (
     <div className="daw-container">
+      {/* Hidden audio element for decoding WebRTC remote host audio stream */}
+      <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
       {/* Header */}
       <header className="daw-header">
         <div className="daw-title-group">
