@@ -29,6 +29,8 @@ export const GuestInviteModal: React.FC<GuestInviteModalProps> = ({
     const uniqueInvCode = 'inv_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
     
     let newSessionId: string;
+    // We rotate the session token when a new link is explicitly generated to completely isolate the room
+    // and prevent old guests from connecting to the new session.
     if (forceNewSession) {
       newSessionId = rotateHostSessionToken(safeHost);
     } else {
@@ -57,7 +59,7 @@ export const GuestInviteModal: React.FC<GuestInviteModalProps> = ({
 
   const handleGenerateLink = (e: React.FormEvent) => {
     e.preventDefault();
-    createUniqueLink(guestName, false, customOrigin);
+    createUniqueLink(guestName, true, customOrigin); // Force rotation when manually updating
   };
 
   const handleCopyLink = (customText?: string) => {

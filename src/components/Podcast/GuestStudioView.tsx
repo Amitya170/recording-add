@@ -173,8 +173,9 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     };
 
     const setup = async () => {
-      const ctx = await engine.init();
-      await eHost.init(ctx);
+      // Force 48000Hz (48kHz) to strictly match WebRTC Opus codec standard.
+      const ctx = await engine.init(undefined, 48000);
+      await eHost.init(ctx, 48000);
       await refreshDevices();
 
       const existingStream = engine.mediaStream;

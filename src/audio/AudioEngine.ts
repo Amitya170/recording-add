@@ -165,31 +165,15 @@ export class SpeakerAudioEngine {
 
     let nodeAttached = false;
 
-    // Strategy 1: If an HTMLMediaElement is playing the WebRTC stream, tap into its
-    // decoded PCM output via createMediaElementSource. This bypasses all browser WebRTC
-    // WebAudio bugs and guarantees 100% reliable audio frames.
-    if (audioElement) {
-      try {
-        let elemSource = this.mediaElementSourceMap.get(audioElement);
-        if (!elemSource) {
-          elemSource = this.ctx.createMediaElementSource(audioElement);
-          this.mediaElementSourceMap.set(audioElement, elemSource);
-        }
-        this.sourceNode = elemSource;
-        nodeAttached = true;
-      } catch (e) {
-        console.warn('[AudioEngine] createMediaElementSource fallback to createMediaStreamSource:', e);
-      }
-    }
-
-    // Strategy 2: Direct MediaStreamAudioSourceNode on a clean stream instance
+    // Direct MediaStreamAudioSourceNode on a clean stream instance
+    // Using a new MediaStream instance prevents browser bugs related to track state caching
     if (!nodeAttached) {
       try {
         const cleanStream = new MediaStream(stream.getAudioTracks());
         this.sourceNode = this.ctx.createMediaStreamSource(cleanStream);
         nodeAttached = true;
       } catch (err) {
-        console.warn('[AudioEngine] createMediaStreamSource failed:', err);
+        console.error('[AudioEngine] createMediaStreamSource failed (WebRTC track may be broken):', err);
       }
     }
 

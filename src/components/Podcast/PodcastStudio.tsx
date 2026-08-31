@@ -311,8 +311,11 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     };
 
     const setup = async () => {
-      const ctx = await eA.init();
-      await eB.init(ctx);
+      // Force 48000Hz (48kHz) to strictly match WebRTC Opus codec standard.
+      // Failing to match the WebRTC sample rate causes Chromium's MediaStreamAudioSourceNode
+      // to silently drop the incoming network audio stream.
+      const ctx = await eA.init(undefined, 48000);
+      await eB.init(ctx, 48000);
       await refreshDevices();
 
       // If mic was auto-selected before engines were ready, retry stream attachment
@@ -578,6 +581,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     if (bA && bB && engineA.current?.audioContext) {
       compiled = mergeToStereo(engineA.current.audioContext, bA, bB);
     } else if (bA) {
+      if (webrtcEngine.current?.isConnected && !bB) {
+        alert('⚠️ WARNING: Guest was connected but their audio track failed to record properly. The saved file will only contain the Host audio. Please ensure the Guest microphone is active and not blocked by the browser.');
+      }
       compiled = bA;
     } else if (bB) {
       compiled = bB;
