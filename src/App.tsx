@@ -30,7 +30,7 @@ const getInitialUrlParams = () => {
   const isGuestSession = Boolean(guest || (session && session !== 'podcast_main_session' && !invite));
   return {
     inviteToken: invite || null,
-    guestNameParam: guest || (session ? 'Guest Speaker' : undefined),
+    guestNameParam: guest || undefined,
     hostNameParam: host || undefined,
     sessionToken: session || 'podcast_main_session',
     isGuestSession,

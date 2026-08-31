@@ -360,40 +360,8 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
   // Invalidate old room and migrate Host WebRTC to new session token
   const handleSessionTokenChange = (newToken: string) => {
+    setIsConnectedB(false);
     setStudioSessionToken(newToken);
-    if (webrtcEngine.current) {
-      webrtcEngine.current.dispose();
-      setIsConnectedB(false);
-      const rRole = currentUser?.role === 'user' ? 'guest' : 'host';
-      const rEngine = new WebRTCAudioEngine(rRole, newToken);
-      rEngine.onStatusChange = (st) => {
-        setWebrtcStatus(st);
-        if (st.connected) setIsConnectedB(true);
-      };
-      rEngine.onRemoteStream = async (remoteStream) => {
-        if (remoteAudioRef.current) {
-          remoteAudioRef.current.srcObject = remoteStream;
-          remoteAudioRef.current.volume = 1.0;
-          remoteAudioRef.current.muted = false;
-          try {
-            await remoteAudioRef.current.play();
-          } catch (e) {
-            console.warn('[Host] Remote audio playback autoplay prevented:', e);
-          }
-        }
-        if (engineB.current) {
-          await engineB.current.startMediaStream(remoteStream);
-          setIsConnectedB(true);
-          if (isRecordingRef.current) {
-            engineB.current.startRecording();
-          }
-        }
-      };
-      if (engineA.current?.mediaStream) {
-        rEngine.setLocalStream(engineA.current.mediaStream).catch(console.warn);
-      }
-      webrtcEngine.current = rEngine;
-    }
   };
 
   // Visualizer Loop
