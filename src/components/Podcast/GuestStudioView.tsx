@@ -129,7 +129,7 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
       }
       // SECONDARY: connect to engine for waveform metering
       if (engineHostIncoming.current) {
-        await engineHostIncoming.current.startMediaStream(remoteStream, remoteAudioRef.current);
+        await engineHostIncoming.current.startMediaStream(remoteStream);
       }
     };
     rEngine.onSignal = (sig: any) => {

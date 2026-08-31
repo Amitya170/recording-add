@@ -276,7 +276,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       }
       // SECONDARY path: engine for waveform visualizer & PCM recording
       if (engineB.current) {
-        await engineB.current.startMediaStream(remoteStream, remoteAudioRef.current);
+        await engineB.current.startMediaStream(remoteStream);
         setIsConnectedB(true);
         if (isRecordingRef.current) {
           engineB.current.startRecording();
@@ -382,7 +382,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
           }
         }
         if (engineB.current) {
-          await engineB.current.startMediaStream(remoteStream, remoteAudioRef.current);
+          await engineB.current.startMediaStream(remoteStream);
           setIsConnectedB(true);
           if (isRecordingRef.current) {
             engineB.current.startRecording();

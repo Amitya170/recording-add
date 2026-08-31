@@ -24,7 +24,6 @@ export class SpeakerAudioEngine {
   private ctx: AudioContext | null = null;
   private stream: MediaStream | null = null;
   private sourceNode: AudioNode | null = null;
-  private mediaElementSourceMap = new WeakMap<HTMLMediaElement, MediaElementAudioSourceNode>();
   private analyserEngine: AnalyserEngine | null = null;
   private gainNode: GainNode | null = null;
   private scriptNode: ScriptProcessorNode | null = null;
@@ -149,7 +148,7 @@ export class SpeakerAudioEngine {
     this.applyMuteState();
   }
 
-  public async startMediaStream(stream: MediaStream, audioElement?: HTMLMediaElement | null): Promise<void> {
+  public async startMediaStream(stream: MediaStream): Promise<void> {
     if (!this.ctx) throw new Error('Engine not initialized');
 
     if (this.ctx.state === 'suspended') {
