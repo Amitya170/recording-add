@@ -216,9 +216,10 @@ export class SpeakerAudioEngine {
       this.silentSink = null;
     }
 
-    // Always create a silent sink gain node to drive the Web Audio render clock
+    // Always create a non-zero silent sink gain node to drive the Web Audio render clock
+    // without audible output (prevents browser power-saver from pausing the graph)
     this.silentSink = this.ctx.createGain();
-    this.silentSink.gain.value = 0;
+    this.silentSink.gain.value = 0.00001;
     this.silentSink.connect(this.ctx.destination);
 
     // Try AudioWorklet thread isolation first
