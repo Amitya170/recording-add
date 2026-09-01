@@ -436,15 +436,17 @@ export class WebRTCAudioEngine {
       this.updateStatus('Guest Connected ✓ — Audio Call Active', true);
 
       call.on('stream', (remoteStream) => {
-        this.handleRemoteStream(remoteStream);
+        console.log('[WebRTC] Host: received guest audio stream via call.on(stream)');
+        this.handleRemoteStream(remoteStream, true);
       });
 
       // [FIX 4 + FIX 7] Attach unified ICE diagnostics with proper restart
       const pc = (call as any).peerConnection as RTCPeerConnection;
       if (pc) {
         pc.ontrack = (event) => {
+          console.log('[WebRTC] Host: received guest audio track via pc.ontrack');
           const stream = event.streams[0] || new MediaStream([event.track]);
-          this.handleRemoteStream(stream);
+          this.handleRemoteStream(stream, true);
         };
 
         this.attachIceDiagnostics(pc, 'Host');
@@ -533,17 +535,20 @@ export class WebRTCAudioEngine {
       }
     }, 8000);
 
-    // 1. Data Connection (Immediate handshake)
+    // 1. Data Connection (Handshake first to prevent simultaneous SDP offer collisions)
     try { this.dataConn?.close(); } catch {}
     const conn = this.peer.connect(hostId, { reliable: true });
     this.dataConn = conn;
 
     conn.on('open', () => {
-      console.log('[WebRTC] Guest: data channel OPEN with host');
+      console.log('[WebRTC] Guest: data channel OPEN with host — now initiating audio call');
       this.isConnecting = false;
       this.guestRetryBackoffMs = WebRTCAudioEngine.GUEST_RETRY_MIN_MS;
       this.stopGuestCallLoop();
       this.updateStatus('Connected to Host ✓ (P2P Call Active)', true);
+
+      // 2. Audio Media Call (Initiated cleanly after data channel is established)
+      this.startMediaCall(hostId);
     });
 
     conn.on('data', (data: any) => {
@@ -551,7 +556,7 @@ export class WebRTCAudioEngine {
       if (data?.type === '__TRACK_UPDATED__') {
         console.log('[WebRTC] Guest: host updated audio track — refreshing playback');
         if (this.remoteStream) {
-          this.handleRemoteStream(this.remoteStream);
+          this.handleRemoteStream(this.remoteStream, true);
         }
         return;
       }
@@ -570,28 +575,34 @@ export class WebRTCAudioEngine {
       this.isConnecting = false;
       this.increaseGuestBackoff();
     });
+  }
 
-    // 2. Audio Media Call
+  private startMediaCall(hostId: string) {
+    if (!this.peer || this.peer.destroyed || this.isDisposed) return;
     try { this.mediaConn?.close(); } catch {}
+
     const guestStream = getEnsuredAudioStream(this.localStream);
+    console.log('[WebRTC] Guest: calling host audio with tracks:', guestStream.getAudioTracks().length);
     const call = this.peer.call(hostId, guestStream);
 
     if (call) {
       this.mediaConn = call;
 
       call.on('stream', (remoteStream) => {
+        console.log('[WebRTC] Guest: received host audio stream via call.on(stream)');
         this.isConnecting = false;
         this.stopGuestCallLoop();
-        this.handleRemoteStream(remoteStream);
+        this.handleRemoteStream(remoteStream, true);
       });
 
       const pc = (call as any).peerConnection as RTCPeerConnection;
       if (pc) {
         pc.ontrack = (event) => {
+          console.log('[WebRTC] Guest: received host audio track via pc.ontrack');
           const stream = event.streams[0] || new MediaStream([event.track]);
           this.isConnecting = false;
           this.stopGuestCallLoop();
-          this.handleRemoteStream(stream);
+          this.handleRemoteStream(stream, true);
         };
 
         this.attachIceDiagnostics(pc, 'Guest');
@@ -652,7 +663,6 @@ export class WebRTCAudioEngine {
     };
 
     const immediateSuccess = await replaceSenders();
-    // In case SDP negotiation was still in-flight, retry after short intervals
     if (!immediateSuccess) {
       setTimeout(replaceSenders, 400);
       setTimeout(replaceSenders, 1200);
@@ -661,11 +671,11 @@ export class WebRTCAudioEngine {
     // Send track update signal over data connection
     this.sendSignal({ type: '__TRACK_UPDATED__', timestamp: Date.now() });
 
-    // If Guest and not connected or in progress, initiate call
+    // If Guest and dataConn is open but mediaConn is not yet active, call host
     if (this.role === 'guest' && this.peer && !this.peer.destroyed && !this.isDisposed) {
-      if (!this.isConnected && !this.isConnecting && (!this.mediaConn || !immediateSuccess)) {
-        console.log('[WebRTC] Guest: initiating call with live microphone stream…');
-        this.attemptGuestCall();
+      if (this.dataConn && this.dataConn.open && !this.mediaConn) {
+        const hostId = `pcshost${this.sessionToken}`;
+        this.startMediaCall(hostId);
       }
     }
   }
