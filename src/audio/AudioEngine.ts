@@ -148,6 +148,36 @@ export class SpeakerAudioEngine {
     this.applyMuteState();
   }
 
+  public async startMediaElementSource(element: HTMLAudioElement): Promise<void> {
+    if (!this.ctx) throw new Error('Engine not initialized');
+
+    if (this.ctx.state === 'suspended') {
+      try { await this.ctx.resume(); } catch {}
+    }
+
+    if (this.sourceNode) {
+      try { this.sourceNode.disconnect(); } catch {}
+      this.sourceNode = null;
+    }
+
+    try {
+      this.sourceNode = this.ctx.createMediaElementSource(element);
+    } catch (err) {
+      console.warn('[AudioEngine] createMediaElementSource existing or failed, falling back:', err);
+    }
+
+    if (this.sourceNode) {
+      this.sourceNode.connect(this.gainNode!);
+      this.gainNode!.connect(this.analyserEngine!.node);
+
+      // Always connect to destination so decoded remote audio is heard through headphones/speakers
+      this.gainNode!.connect(this.ctx.destination);
+    }
+
+    this.setupAudioCaptureNode();
+    this.applyMuteState();
+  }
+
   public async startMediaStream(stream: MediaStream): Promise<void> {
     if (!this.ctx) throw new Error('Engine not initialized');
 
@@ -168,14 +198,14 @@ export class SpeakerAudioEngine {
       this.sourceNode = null;
     }
 
-    if (tracks.length > 0) {
-      try {
-        const cleanStream = new MediaStream(tracks);
-        this.sourceNode = this.ctx.createMediaStreamSource(cleanStream);
-      } catch (err) {
-        console.error('[AudioEngine] createMediaStreamSource on cleanStream failed, trying raw stream:', err);
+    try {
+      this.sourceNode = this.ctx.createMediaStreamSource(stream);
+    } catch (err) {
+      console.error('[AudioEngine] createMediaStreamSource on raw stream failed:', err);
+      if (tracks.length > 0) {
         try {
-          this.sourceNode = this.ctx.createMediaStreamSource(stream);
+          const cleanStream = new MediaStream(tracks);
+          this.sourceNode = this.ctx.createMediaStreamSource(cleanStream);
         } catch (e) {
           console.error('[AudioEngine] createMediaStreamSource failed completely:', e);
         }

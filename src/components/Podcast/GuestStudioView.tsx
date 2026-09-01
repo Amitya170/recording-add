@@ -117,24 +117,34 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     };
     rEngine.onRemoteStream = async (remoteStream) => {
       console.log('[GuestStudio] Received host remote stream:', remoteStream.id, 'tracks:', remoteStream.getAudioTracks().length);
-      // PRIMARY playback path: audio element for reliable cross-browser & mobile playback
+      remoteStream.getAudioTracks().forEach((t) => {
+        t.enabled = true;
+      });
+
+      // 1. Attach to audio element for hardware Opus decoding
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
         remoteAudioRef.current.volume = 1.0;
         remoteAudioRef.current.muted = false;
-        remoteAudioRef.current.oncanplay = () => {
-          remoteAudioRef.current?.play().catch((e) => console.warn('[GuestStudio] oncanplay play error:', e));
-        };
         try {
           await remoteAudioRef.current.play();
           console.log('[GuestStudio] Host audio playback started');
         } catch (e) {
-          console.warn('[GuestStudio] Autoplay prevented, waiting for touch/click interaction:', e);
+          console.warn('[GuestStudio] Autoplay waiting for click interaction:', e);
         }
       }
-      // SECONDARY: connect to engine for waveform metering
+
+      // 2. Connect to engine for live waveform metering & visualizer
       if (engineHostIncoming.current) {
-        await engineHostIncoming.current.startMediaStream(remoteStream);
+        if (remoteAudioRef.current) {
+          try {
+            await engineHostIncoming.current.startMediaElementSource(remoteAudioRef.current);
+          } catch {
+            await engineHostIncoming.current.startMediaStream(remoteStream);
+          }
+        } else {
+          await engineHostIncoming.current.startMediaStream(remoteStream);
+        }
       }
     };
     rEngine.onSignal = (sig: any) => {

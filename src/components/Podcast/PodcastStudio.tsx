@@ -262,24 +262,34 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     };
     rEngine.onRemoteStream = async (remoteStream) => {
       console.log('[Host] Remote guest stream attached, tracks:', remoteStream.getAudioTracks().length);
-      // PRIMARY playback path: audio element (lowest latency, direct headphone output)
+      remoteStream.getAudioTracks().forEach((t) => {
+        t.enabled = true;
+      });
+
+      // 1. Attach to audio element for hardware Opus decoding
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
         remoteAudioRef.current.volume = 1.0;
         remoteAudioRef.current.muted = false;
-        remoteAudioRef.current.oncanplay = () => {
-          remoteAudioRef.current?.play().catch((e) => console.warn('[Host] oncanplay play error:', e));
-        };
         try {
           await remoteAudioRef.current.play();
-          console.log('[Host] Remote guest audio playback started successfully');
+          console.log('[Host] Remote guest audio playback started');
         } catch (e) {
-          console.warn('[Host] Remote audio playback autoplay prevented:', e);
+          console.warn('[Host] Remote audio playback waiting for click:', e);
         }
       }
-      // SECONDARY path: engine for waveform visualizer & PCM recording
+
+      // 2. Attach to engineB for real-time waveform visualization & PCM multi-track recording
       if (engineB.current) {
-        await engineB.current.startMediaStream(remoteStream);
+        if (remoteAudioRef.current) {
+          try {
+            await engineB.current.startMediaElementSource(remoteAudioRef.current);
+          } catch {
+            await engineB.current.startMediaStream(remoteStream);
+          }
+        } else {
+          await engineB.current.startMediaStream(remoteStream);
+        }
         setIsConnectedB(true);
         if (isRecordingRef.current) {
           engineB.current.startRecording();
