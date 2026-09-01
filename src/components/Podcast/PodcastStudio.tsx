@@ -878,13 +878,6 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
   return (
     <div className="daw-container">
-      {/* Hardware-accelerated audio element for decoding WebRTC remote guest audio stream */}
-      <audio
-        ref={remoteAudioRef}
-        autoPlay
-        playsInline
-        style={{ position: 'fixed', top: -9999, left: -9999, width: 1, height: 1, opacity: 0.01, pointerEvents: 'none' }}
-      />
       {/* Session Crash Recovery Banner */}
       {recoveryData && (
         <div style={{ background: 'linear-gradient(90deg, #ff2a5f, #ffb700)', padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: '#fff', fontWeight: 600, fontSize: '0.8rem' }}>
