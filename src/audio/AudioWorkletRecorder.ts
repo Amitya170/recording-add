@@ -23,6 +23,12 @@ class PcmRecorderProcessor extends AudioWorkletProcessor {
     const channelData = input[0];
     if (!channelData || channelData.length === 0) return true;
 
+    // Pass through to output so the Web Audio render clock remains active
+    const output = outputs[0];
+    if (output && output[0]) {
+      output[0].set(channelData);
+    }
+
     // Fast metering calculation
     let peak = 0;
     let sumSq = 0;

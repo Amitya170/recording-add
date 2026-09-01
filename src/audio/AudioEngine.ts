@@ -250,6 +250,8 @@ export class SpeakerAudioEngine {
     this.scriptNode = this.ctx.createScriptProcessor(2048, 1, 1);
     this.scriptNode.onaudioprocess = (e: AudioProcessingEvent) => {
       const rawInput = e.inputBuffer.getChannelData(0);
+      const output = e.outputBuffer.getChannelData(0);
+      output.set(rawInput); // Keep audio pipeline pumping
 
       let peak = 0, sumSq = 0;
       const processed = new Float32Array(rawInput.length);

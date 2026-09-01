@@ -335,8 +335,13 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
 
   return (
     <div className="daw-container">
-      {/* Hidden audio element for decoding WebRTC remote host audio stream */}
-      <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
+      {/* Hardware-accelerated audio element for decoding WebRTC remote host audio stream */}
+      <audio
+        ref={remoteAudioRef}
+        autoPlay
+        playsInline
+        style={{ position: 'fixed', top: -9999, left: -9999, width: 1, height: 1, opacity: 0.01, pointerEvents: 'none' }}
+      />
       {/* Header */}
       <header className="daw-header">
         <div className="daw-title-group">
