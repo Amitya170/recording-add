@@ -426,12 +426,23 @@ export class WebRTCAudioEngine {
     });
 
     // Incoming MediaConnection (Audio Call) from guest
-    this.peer.on('call', (call) => {
+    this.peer.on('call', async (call) => {
       console.log('[WebRTC] Host: incoming audio call from guest', call.peer);
       try { this.mediaConn?.close(); } catch {}
       this.mediaConn = call;
 
-      const hostStream = getEnsuredAudioStream(this.localStream);
+      let hostStream = this.localStream;
+      if (!hostStream || hostStream.getAudioTracks().length === 0 || hostStream.getAudioTracks()[0].readyState !== 'live') {
+        try {
+          hostStream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          });
+          this.localStream = hostStream;
+        } catch {
+          hostStream = getEnsuredAudioStream(this.localStream);
+        }
+      }
+
       call.answer(hostStream);
       this.updateStatus('Guest Connected ✓ — Audio Call Active', true);
 
@@ -440,7 +451,7 @@ export class WebRTCAudioEngine {
         this.handleRemoteStream(remoteStream, true);
       });
 
-      // [FIX 4 + FIX 7] Attach unified ICE diagnostics with proper restart
+      // Attach unified ICE diagnostics with proper restart
       const pc = (call as any).peerConnection as RTCPeerConnection;
       if (pc) {
         pc.ontrack = (event) => {
@@ -463,9 +474,6 @@ export class WebRTCAudioEngine {
 
   // ──────────────────────────────────────────────────────────────
   // GUEST — Connect and call Host with auto-retry
-  // [FIX 6] Serialized call loop with exponential backoff.
-  // Replaces the old overlapping setInterval(5000) + setTimeout(3000)
-  // that caused PeerJS to enter an inconsistent state.
   // ──────────────────────────────────────────────────────────────
 
   private startGuestCallLoop() {
@@ -577,11 +585,22 @@ export class WebRTCAudioEngine {
     });
   }
 
-  private startMediaCall(hostId: string) {
+  private async startMediaCall(hostId: string) {
     if (!this.peer || this.peer.destroyed || this.isDisposed) return;
     try { this.mediaConn?.close(); } catch {}
 
-    const guestStream = getEnsuredAudioStream(this.localStream);
+    let guestStream = this.localStream;
+    if (!guestStream || guestStream.getAudioTracks().length === 0 || guestStream.getAudioTracks()[0].readyState !== 'live') {
+      try {
+        guestStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+        this.localStream = guestStream;
+      } catch {
+        guestStream = getEnsuredAudioStream(this.localStream);
+      }
+    }
+
     console.log('[WebRTC] Guest: calling host audio with tracks:', guestStream.getAudioTracks().length);
     const call = this.peer.call(hostId, guestStream);
 
@@ -627,7 +646,7 @@ export class WebRTCAudioEngine {
 
   /**
    * Updates the microphone stream.
-   * If a call is already active, updates the RTP sender track on the fly.
+   * Immediately starts or updates the audio call with the live stream.
    */
   public async setLocalStream(stream: MediaStream): Promise<void> {
     this.localStream = stream;
@@ -641,43 +660,33 @@ export class WebRTCAudioEngine {
     if (this.lastLocalTrackId === audioTrack.id) return;
     this.lastLocalTrackId = audioTrack.id;
 
-    const replaceSenders = async () => {
-      if (!this.mediaConn) return false;
+    // If Guest and data channel is open, initiate/re-establish media call with live mic stream
+    if (this.role === 'guest' && this.peer && !this.peer.destroyed && !this.isDisposed) {
+      if (this.dataConn && this.dataConn.open) {
+        const hostId = `pcshost${this.sessionToken}`;
+        this.startMediaCall(hostId);
+      }
+    }
+
+    // Replace track on existing sender if already connected
+    if (this.mediaConn) {
       const pc = (this.mediaConn as unknown as { peerConnection?: RTCPeerConnection }).peerConnection;
       if (pc) {
         const senders = pc.getSenders();
         const audioSenders = senders.filter((s) => !s.track || s.track.kind === 'audio');
-        let replaced = false;
         for (const sender of audioSenders) {
           try {
             await sender.replaceTrack(audioTrack);
-            replaced = true;
             console.log(`[WebRTC] ${this.role} replaced active audio track with live mic:`, audioTrack.label);
           } catch (e) {
             console.warn('[WebRTC] replaceTrack error:', e);
           }
         }
-        return replaced;
       }
-      return false;
-    };
-
-    const immediateSuccess = await replaceSenders();
-    if (!immediateSuccess) {
-      setTimeout(replaceSenders, 400);
-      setTimeout(replaceSenders, 1200);
     }
 
     // Send track update signal over data connection
     this.sendSignal({ type: '__TRACK_UPDATED__', timestamp: Date.now() });
-
-    // If Guest and dataConn is open but mediaConn is not yet active, call host
-    if (this.role === 'guest' && this.peer && !this.peer.destroyed && !this.isDisposed) {
-      if (this.dataConn && this.dataConn.open && !this.mediaConn) {
-        const hostId = `pcshost${this.sessionToken}`;
-        this.startMediaCall(hostId);
-      }
-    }
   }
 
   /**
