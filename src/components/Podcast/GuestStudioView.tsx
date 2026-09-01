@@ -136,15 +136,7 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
 
       // 2. Connect to engine for live waveform metering & visualizer
       if (engineHostIncoming.current) {
-        if (remoteAudioRef.current) {
-          try {
-            await engineHostIncoming.current.startMediaElementSource(remoteAudioRef.current);
-          } catch {
-            await engineHostIncoming.current.startMediaStream(remoteStream);
-          }
-        } else {
-          await engineHostIncoming.current.startMediaStream(remoteStream);
-        }
+        await engineHostIncoming.current.startMediaStream(remoteStream);
       }
     };
     rEngine.onSignal = (sig: any) => {

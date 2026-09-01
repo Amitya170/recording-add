@@ -281,15 +281,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
       // 2. Attach to engineB for real-time waveform visualization & PCM multi-track recording
       if (engineB.current) {
-        if (remoteAudioRef.current) {
-          try {
-            await engineB.current.startMediaElementSource(remoteAudioRef.current);
-          } catch {
-            await engineB.current.startMediaStream(remoteStream);
-          }
-        } else {
-          await engineB.current.startMediaStream(remoteStream);
-        }
+        // Feed the WebRTC stream directly into the Web Audio API graph.
+        // (The <audio> tag above guarantees that Chromium keeps the stream active and decoded).
+        await engineB.current.startMediaStream(remoteStream);
         setIsConnectedB(true);
         if (isRecordingRef.current) {
           engineB.current.startRecording();
