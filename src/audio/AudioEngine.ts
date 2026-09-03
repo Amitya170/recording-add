@@ -219,7 +219,48 @@ export class SpeakerAudioEngine {
       this.ensureMonitoringConnection();
     }
 
-    this.setupAudioCaptureNode();
+    // Clean up previous script processor and silent sink
+    if (this.scriptNode) {
+      try { this.scriptNode.disconnect(); } catch {}
+      this.scriptNode = null;
+    }
+    if (this.silentSink) {
+      try { this.silentSink.disconnect(); } catch {}
+      this.silentSink = null;
+    }
+
+    // Use ScriptProcessor directly for incoming remote WebRTC audio streams.
+    // In Chromium, AudioWorklet connected to a silent sink from a WebRTC MediaStreamAudioSourceNode
+    // is optimized away / stalls, whereas ScriptProcessorNode forces active buffer delivery.
+    this.scriptNode = this.ctx.createScriptProcessor(2048, 1, 1);
+    this.scriptNode.onaudioprocess = (e: AudioProcessingEvent) => {
+      const rawInput = e.inputBuffer.getChannelData(0);
+      let peak = 0, sumSq = 0;
+      const processed = new Float32Array(rawInput.length);
+      for (let i = 0; i < rawInput.length; i++) {
+        const val = rawInput[i];
+        processed[i] = val;
+        const abs = Math.abs(val);
+        if (abs > peak) peak = abs;
+        sumSq += val * val;
+      }
+      const rms = Math.sqrt(sumSq / rawInput.length);
+      if (this.meterCallback) {
+        this.meterCallback({ peak, rms });
+      }
+
+      if (this.isRecording && !this.isPaused) {
+        this.recordedChunks.push(processed);
+        this.totalSamples += processed.length;
+      }
+    };
+
+    this.gainNode!.connect(this.scriptNode);
+    this.silentSink = this.ctx.createGain();
+    this.silentSink.gain.value = 0.00001;
+    this.scriptNode.connect(this.silentSink);
+    this.silentSink.connect(this.ctx.destination);
+
     this.applyMuteState();
   }
 

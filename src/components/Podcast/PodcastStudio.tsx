@@ -279,6 +279,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         remoteAudioRef.current.srcObject = remoteStream;
         remoteAudioRef.current.muted = false;
         remoteAudioRef.current.volume = isMutedBRef.current ? 0 : Math.min(1, Math.max(0, gainBRef.current));
+        remoteAudioRef.current.oncanplay = () => {
+          remoteAudioRef.current?.play().catch((e) => console.warn('[Host] oncanplay play error:', e));
+        };
         try {
           await remoteAudioRef.current.play();
           console.log('[Host] Remote guest audio playback started');
