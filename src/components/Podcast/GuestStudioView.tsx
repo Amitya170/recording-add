@@ -59,6 +59,10 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // FX & Noise Suppression State
+  const [isRecordingActive, setIsRecordingActive] = useState(false);
+  const [isRecordingPaused, setIsRecordingPaused] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
+  const [syncProgress, setSyncProgress] = useState(0);
   const [showFxModal, setShowFxModal] = useState(false);
   const [isNoiseSuppressed, setIsNoiseSuppressed] = useState(true);
   const [transcriptItems, setTranscriptItems] = useState<TranscriptItem[]>([]);
@@ -68,6 +72,8 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
   const sttEngine = useRef<SpeechToTextEngine | null>(null);
 
   const guestDisplayName = guestNameParam || currentUser?.name || 'Guest Speaker';
+  const guestDisplayNameRef = useRef(guestDisplayName);
+  guestDisplayNameRef.current = guestDisplayName;
 
   const handleDeviceChange = useCallback(async (id: string) => {
     setSelectedDevice(id);
@@ -143,16 +149,44 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
         await engineHostIncoming.current.startMediaStream(remoteStream);
       }
     };
-    rEngine.onSignal = (sig: any) => {
+    rEngine.onSignal = async (sig: any) => {
       if (sig?.type === 'RECORDING_STATE') {
         if (sig.isRecording) {
           if (sig.isPaused) {
             engineGuest.current?.pauseRecording();
+            setIsRecordingActive(true);
+            setIsRecordingPaused(true);
           } else {
             engineGuest.current?.startRecording();
+            setIsRecordingActive(true);
+            setIsRecordingPaused(false);
+            setSyncStatus('idle');
           }
         } else {
           engineGuest.current?.stopRecording();
+          setIsRecordingActive(false);
+          setIsRecordingPaused(false);
+
+          // Riverside-style Double-Ender: extract pristine 48kHz PCM and stream to Host DAW
+          const pcm = engineGuest.current?.getRawRecordedPCM();
+          if (pcm && pcm.length > 0 && webrtcEngine.current) {
+            console.log(`[Guest] Double-Ender: transmitting ${pcm.length} pristine PCM samples to Host DAW...`);
+            setSyncStatus('syncing');
+            try {
+              const success = await webrtcEngine.current.sendRecordedAudio(pcm, {
+                guestName: guestDisplayNameRef.current,
+                sampleRate: 48000,
+                totalSamples: pcm.length,
+                timestamp: Date.now(),
+              }, (pct) => {
+                setSyncProgress(pct);
+              });
+              setSyncStatus(success ? 'synced' : 'error');
+            } catch (err) {
+              console.error('[Guest] Audio sync error:', err);
+              setSyncStatus('error');
+            }
+          }
         }
       }
     };
@@ -249,13 +283,29 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     };
   }, []);
 
-  // Visualizer Tick
+  // Visualizer Tick & Live Telemetry Stream
   useEffect(() => {
     let animId: number;
+    let lastTelemetry = 0;
     const tick = () => {
       if (engineGuest.current) {
         const d = engineGuest.current.getAnalysis();
-        if (d) setAnalysisGuest(d);
+        if (d) {
+          setAnalysisGuest(d);
+
+          // Stream live meter telemetry to Host at ~15fps (every 66ms) over WebRTC DataChannel
+          const now = performance.now();
+          if (now - lastTelemetry > 66 && webrtcEngine.current?.isConnected) {
+            lastTelemetry = now;
+            webrtcEngine.current.sendSignal({
+              type: 'GUEST_TELEMETRY',
+              peakDb: d.peakLeftDb,
+              rmsDb: d.rmsDb,
+              isClipping: d.isClipping,
+              timestamp: Date.now(),
+            });
+          }
+        }
       }
       animId = requestAnimationFrame(tick);
     };
@@ -417,7 +467,13 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
               display: 'inline-block'
             }} />
             <span>
-              {webrtcStatus.connected
+              {syncStatus === 'syncing'
+                ? `📡 SYNCING PRISTINE AUDIO TO HOST DAW (${syncProgress}%)...`
+                : syncStatus === 'synced'
+                ? '✓ STUDIO MASTER AUDIO SYNCED TO HOST DAW'
+                : isRecordingActive
+                ? `🔴 ON AIR • RECORDING STUDIO MASTER (${isRecordingPaused ? 'PAUSED' : 'LIVE'})`
+                : webrtcStatus.connected
                 ? 'CONNECTED TO HOST LIVE (P2P CALL ACTIVE — AUDIO STREAMING)'
                 : 'CONNECTING TO HOST LIVE... (Waiting for Host session to start)'}
             </span>

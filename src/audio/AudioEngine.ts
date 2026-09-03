@@ -438,6 +438,30 @@ export class SpeakerAudioEngine {
     return buffer;
   }
 
+  /**
+   * Returns merged Float32Array PCM of the current recording.
+   * Useful for exporting pristine local audio to send to the host DAW.
+   */
+  public getRawRecordedPCM(): Float32Array {
+    if (this.totalSamples === 0) return new Float32Array(0);
+    const merged = new Float32Array(this.totalSamples);
+    let offset = 0;
+    for (const chunk of this.recordedChunks) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return merged;
+  }
+
+  /**
+   * Injects external Float32Array PCM samples (e.g. pristine double-ender audio from Guest)
+   * into this engine's buffer so getRecordedBuffer() returns the exact studio master.
+   */
+  public injectExternalPCM(samples: Float32Array): void {
+    this.recordedChunks = [new Float32Array(samples)];
+    this.totalSamples = samples.length;
+  }
+
   public toggleMute(): boolean {
     this.isMuted = !this.isMuted;
     this.applyMuteState();

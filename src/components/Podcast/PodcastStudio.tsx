@@ -33,6 +33,7 @@ import { SpeakerAudioEngine, getAudioDevices, mergeToStereo, type DeviceInfo } f
 import type { AnalysisData } from '../../audio/AnalyserEngine';
 import { SpeechToTextEngine, type TranscriptItem } from '../../audio/SpeechToTextEngine';
 import { encodeWav } from '../../audio/encoders/WavEncoder';
+import { createAudioBufferFromPCM } from '../../audio/AudioBufferUtils';
 import { analyzeAudioBuffer } from '../../audio/AcousticAnalyzer';
 import { SpeakerPanel } from './SpeakerPanel';
 import { WaveformEditor } from '../Editor/WaveformEditor';
@@ -129,6 +130,12 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
   } | null>(null);
 
   const [isWebhookConfigured, setIsWebhookConfigured] = useState(Boolean(getGoogleDriveWebhookUrl()));
+
+  // Riverside Double-Ender Audio Sync State
+  const [guestSyncStatus, setGuestSyncStatus] = useState<'idle' | 'syncing' | 'synced'>('idle');
+  const [guestSyncProgress, setGuestSyncProgress] = useState(0);
+  const pendingHostBufferRef = useRef<AudioBuffer | null>(null);
+  const handleGuestPcmReceivedRef = useRef<((pcm: Float32Array) => void) | null>(null);
 
   // Unique Studio WebRTC Session Room Token (persistent per host session unless rotated)
   const [studioSessionToken, setStudioSessionToken] = useState<string>(() => {
@@ -300,6 +307,43 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         }
       }
     };
+
+    // Live Telemetry from Guest (peak/rms metering directly from Guest's microphone)
+    rEngine.onSignal = (sig: any) => {
+      if (sig?.type === 'GUEST_TELEMETRY') {
+        const peak = typeof sig.peakDb === 'number' ? sig.peakDb : -60;
+        const rms = typeof sig.rmsDb === 'number' ? sig.rmsDb : -60;
+        const isClip = Boolean(sig.isClipping);
+        const dummySpec = new Uint8Array(64);
+        const energy = Math.max(0, Math.min(255, Math.round(((rms + 60) / 60) * 255)));
+        for (let i = 0; i < 32; i++) {
+          dummySpec[i] = Math.max(0, Math.round(energy * (1 - i / 36)));
+        }
+        setAnalysisB({
+          peakLeftDb: peak,
+          peakRightDb: peak,
+          rmsDb: rms,
+          lufsEstimate: rms,
+          isClipping: isClip,
+          freqData: dummySpec,
+          timeData: new Float32Array(256),
+        });
+        return;
+      }
+    };
+
+    // Riverside Double-Ender: Pristine PCM Audio Received from Guest
+    rEngine.onAudioBufferReceived = (pcmData: Float32Array, meta: any) => {
+      console.log('[Host] Received Double-Ender pristine audio from Guest:', pcmData.length, 'samples, meta:', meta);
+      handleGuestPcmReceivedRef.current?.(pcmData);
+    };
+
+    // Progress updates during transfer
+    rEngine.onTransferProgress = (pct: number) => {
+      setGuestSyncStatus('syncing');
+      setGuestSyncProgress(pct);
+    };
+
     webrtcEngine.current = rEngine;
 
     // Host mic: no self monitor (prevents hearing own voice).
@@ -559,9 +603,163 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     }
   }, [audioBuffer, bufferA, bufferB]);
 
+  const finalizeAndSaveSession = useCallback((compiled: AudioBuffer, bA: AudioBuffer | null, bB: AudioBuffer | null) => {
+    setAudioBuffer(compiled);
+    const finalDurationSeconds = Math.max(1, Math.round(compiled.duration));
+
+    // Perform deep acoustic & broadcast analysis (LUFS, Crest Factor, Phase, Talk-Time)
+    const acoustic = analyzeAudioBuffer(compiled, bA, bB);
+
+    const sessionTitle = `Podcast Session ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+
+    // Automatically log recording session to SessionStore for Admin Reports
+    const savedSession = saveRecordingSession({
+      hostId: currentUser?.id || 'usr_host',
+      hostName: hostDisplayNameRef.current || currentUser?.name || 'Sarah Connor (Host)',
+      hostEmail: currentUser?.email || 'host@studio.local',
+      adminId: currentUser?.adminId || 'usr_admin1',
+      organizationName: currentUser?.organizationName,
+      guestName: guestDisplayNameRef.current || 'Guest Speaker',
+      title: sessionTitle,
+      durationSeconds: finalDurationSeconds,
+      channelCount: compiled.numberOfChannels,
+      format: 'WAV 32-bit Float',
+      sampleRate: compiled.sampleRate,
+      bitDepth: 32,
+      peakLeftDb: acoustic.truePeakLeftDb,
+      peakRightDb: acoustic.truePeakRightDb,
+      integratedLufs: acoustic.integratedLufs,
+      dynamicRangeScore: acoustic.dynamicRangeScore,
+      phaseCorrelation: acoustic.phaseCorrelation,
+      hostTalkPercent: acoustic.hostTalkPercent,
+      guestTalkPercent: acoustic.guestTalkPercent,
+      silencePercent: acoustic.silencePercent,
+      cueMarkers: markers.map((m) => ({ id: m.id, time: m.time, label: m.label })),
+    });
+
+    // Dispatch storage update so any open Admin tabs update in real-time
+    window.dispatchEvent(new Event('storage'));
+
+    // Save raw binary WAV blobs with embedded BWF & RIFF metadata
+    try {
+      const bwfMeta = {
+        title: savedSession.title,
+        artist: savedSession.hostName,
+        organization: savedSession.organizationName || 'Podcast Craft Studio',
+        description: `Host: ${savedSession.hostName} | Guest: ${savedSession.guestName}`,
+        loudnessLufs: acoustic.integratedLufs,
+        truePeakDb: Math.max(acoustic.truePeakLeftDb, acoustic.truePeakRightDb),
+        cueMarkers: markers.map((m) => ({ time: m.time, label: m.label })),
+      };
+
+      const stereoBlob = encodeWav(compiled, 32, bwfMeta);
+      const blobA = bA ? encodeWav(bA, 32, { ...bwfMeta, title: `${savedSession.title} - Host Stem` }) : undefined;
+      const blobB = bB ? encodeWav(bB, 32, { ...bwfMeta, title: `${savedSession.title} - Guest Stem` }) : undefined;
+      saveSessionAudioBlobs(savedSession.id, stereoBlob, blobA, blobB);
+
+      // Auto-upload recorded audio directly to Google Drive folder if enabled
+      if (getAutoUploadToDrive()) {
+        const sanitized = savedSession.title.replace(/\s+/g, '_');
+        setDriveUpload({
+          isUploading: true,
+          progress: 5,
+          stageText: 'Starting Google Drive auto-upload (0%)...',
+          sessionTitle: savedSession.title,
+        });
+
+        uploadAudioBlobToDrive({
+          blob: stereoBlob,
+          fileName: `${sanitized}_${savedSession.id.slice(0, 8)}.wav`,
+          sessionTitle: savedSession.title,
+          hostName: savedSession.hostName,
+          guestName: savedSession.guestName,
+          durationSeconds: savedSession.durationSeconds,
+          onProgress: (pct, stage) => {
+            setDriveUpload((prev) => (prev ? { ...prev, isUploading: true, progress: pct, stageText: stage } : null));
+          },
+        }).then((res) => {
+          if (res.success) {
+            if (res.fileUrl) {
+              updateSessionDriveStatus(savedSession.id, res.fileUrl);
+            }
+            setDriveUpload({
+              isUploading: false,
+              progress: 100,
+              stageText: 'Session audio uploaded to Google Drive!',
+              fileUrl: res.fileUrl,
+              sessionTitle: savedSession.title,
+            });
+            setUploadModalPopup({
+              type: 'success',
+              title: 'Audio Uploaded Successfully! 🎉',
+              message: `Your podcast recording "${savedSession.title}" has been saved and automatically uploaded to Google Drive.`,
+              fileUrl: res.fileUrl,
+              sessionTitle: savedSession.title,
+            });
+            window.dispatchEvent(new Event('storage'));
+          } else {
+            setDriveUpload({
+              isUploading: false,
+              progress: 0,
+              stageText: 'Google Drive auto-upload: ' + (res.error || 'Check Drive settings'),
+              error: res.error,
+              sessionTitle: savedSession.title,
+            });
+            setUploadModalPopup({
+              type: 'error',
+              title: 'Google Drive Auto-Upload Notice ⚠️',
+              message: 'Your recording was saved locally in the studio, but auto-upload to Google Drive encountered an issue. You can click "Upload to Google Drive" to retry.',
+              error: res.error,
+              sessionTitle: savedSession.title,
+            });
+          }
+        }).catch((e) => {
+          setDriveUpload({
+            isUploading: false,
+            progress: 0,
+            stageText: 'Google Drive auto-upload failed',
+            error: e?.message || 'Unknown network error',
+            sessionTitle: savedSession.title,
+          });
+          setUploadModalPopup({
+            type: 'error',
+            title: 'Google Drive Auto-Upload Failed ⚠️',
+            message: 'Recording saved locally. Network error prevented automatic Google Drive upload.',
+            error: e?.message || 'Network error',
+            sessionTitle: savedSession.title,
+          });
+        });
+      }
+    } catch (err) {
+      console.error('Failed saving session audio blob:', err);
+    }
+  }, [currentUser?.id, currentUser?.email, currentUser?.name, currentUser?.adminId, currentUser?.organizationName, markers]);
+
+  // Register the guest PCM receiver callback ref so WebRTC data transfers always have fresh access
+  useEffect(() => {
+    handleGuestPcmReceivedRef.current = (pcmData: Float32Array) => {
+      console.log('[Host] Double-Ender: assembling Guest pristine studio audio track...');
+      setGuestSyncStatus('synced');
+      const ctx = engineA.current?.audioContext || new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 48000 });
+      const guestBuffer = createAudioBufferFromPCM(ctx, pcmData, 48000, 1);
+      setBufferB(guestBuffer);
+
+      // Inject into engineB so stem audio & visualizer update
+      engineB.current?.injectExternalPCM(pcmData);
+
+      const hostBuf = pendingHostBufferRef.current || bufferA;
+      if (hostBuf) {
+        const stereo = mergeToStereo(ctx, hostBuf, guestBuffer);
+        finalizeAndSaveSession(stereo, hostBuf, guestBuffer);
+        console.log('[Host] Double-Ender master stereo compiled successfully with pristine Guest track!');
+      }
+    };
+  }, [bufferA, finalizeAndSaveSession]);
+
   const handleStop = useCallback(() => {
     const bA = engineA.current?.stopRecording() || null;
     const bB = engineB.current?.stopRecording() || null;
+    pendingHostBufferRef.current = bA;
     const finalDurationSeconds = Math.max(1, Math.round(elapsedRef.current / 1000));
 
     setIsRecording(false);
@@ -569,15 +767,23 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     setBufferA(bA);
     setBufferB(bB);
 
+    sttEngine.current?.stop();
+    clearRecoverySession();
+
+    // Signal Guest to stop and transmit its pristine double-ender PCM
     webrtcEngine.current?.sendSignal({ type: 'RECORDING_STATE', isRecording: false });
+
+    // If Guest is connected, trigger sync status
+    if (webrtcEngine.current?.isConnected) {
+      setGuestSyncStatus('syncing');
+      setGuestSyncProgress(0);
+      console.log('[Host] Waiting for Guest pristine Double-Ender audio transfer...');
+    }
 
     let compiled: AudioBuffer | null = null;
     if (bA && bB && engineA.current?.audioContext) {
       compiled = mergeToStereo(engineA.current.audioContext, bA, bB);
     } else if (bA) {
-      if (webrtcEngine.current?.isConnected && !bB) {
-        alert('⚠️ WARNING: Guest was connected but their audio track failed to record properly. The saved file will only contain the Host audio. Please ensure the Guest microphone is active and not blocked by the browser.');
-      }
       compiled = bA;
     } else if (bB) {
       compiled = bB;
@@ -594,142 +800,10 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       }
     }
 
-    sttEngine.current?.stop();
-    clearRecoverySession();
-
     if (compiled) {
-      setAudioBuffer(compiled);
-
-      const calculatedDuration = Math.max(1, finalDurationSeconds || Math.round(compiled.duration));
-      
-      // Perform deep acoustic & broadcast analysis (LUFS, Crest Factor, Phase, Talk-Time)
-      const acoustic = analyzeAudioBuffer(compiled, bA, bB);
-
-      const sessionTitle = `Podcast Session ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-
-      // Automatically log recording session to SessionStore for Admin Reports
-      const savedSession = saveRecordingSession({
-        hostId: currentUser?.id || 'usr_host',
-        hostName: hostDisplayNameRef.current || currentUser?.name || 'Sarah Connor (Host)',
-        hostEmail: currentUser?.email || 'host@studio.local',
-        adminId: currentUser?.adminId || 'usr_admin1',
-        organizationName: currentUser?.organizationName,
-        guestName: guestDisplayNameRef.current || 'Guest Speaker',
-        title: sessionTitle,
-        durationSeconds: calculatedDuration,
-        channelCount: compiled.numberOfChannels,
-        format: 'WAV 32-bit Float',
-        sampleRate: compiled.sampleRate,
-        bitDepth: 32,
-        peakLeftDb: acoustic.truePeakLeftDb,
-        peakRightDb: acoustic.truePeakRightDb,
-        integratedLufs: acoustic.integratedLufs,
-        dynamicRangeScore: acoustic.dynamicRangeScore,
-        phaseCorrelation: acoustic.phaseCorrelation,
-        hostTalkPercent: acoustic.hostTalkPercent,
-        guestTalkPercent: acoustic.guestTalkPercent,
-        silencePercent: acoustic.silencePercent,
-        cueMarkers: markers.map((m) => ({ id: m.id, time: m.time, label: m.label })),
-      });
-
-      // Dispatch storage update so any open Admin tabs update in real-time
-      window.dispatchEvent(new Event('storage'));
-
-      // Save raw binary WAV blobs with embedded BWF & RIFF metadata
-      try {
-        const bwfMeta = {
-          title: savedSession.title,
-          artist: savedSession.hostName,
-          organization: savedSession.organizationName || 'Podcast Craft Studio',
-          description: `Host: ${savedSession.hostName} | Guest: ${savedSession.guestName}`,
-          loudnessLufs: acoustic.integratedLufs,
-          truePeakDb: Math.max(acoustic.truePeakLeftDb, acoustic.truePeakRightDb),
-          cueMarkers: markers.map((m) => ({ time: m.time, label: m.label })),
-        };
-
-        const stereoBlob = encodeWav(compiled, 32, bwfMeta);
-        const blobA = bA ? encodeWav(bA, 32, { ...bwfMeta, title: `${savedSession.title} - Host Stem` }) : undefined;
-        const blobB = bB ? encodeWav(bB, 32, { ...bwfMeta, title: `${savedSession.title} - Guest Stem` }) : undefined;
-        saveSessionAudioBlobs(savedSession.id, stereoBlob, blobA, blobB);
-
-        // Auto-upload recorded audio directly to Google Drive folder if enabled
-        if (getAutoUploadToDrive()) {
-          const sanitized = savedSession.title.replace(/\s+/g, '_');
-          setDriveUpload({
-            isUploading: true,
-            progress: 5,
-            stageText: 'Starting Google Drive auto-upload (0%)...',
-            sessionTitle: savedSession.title,
-          });
-
-          uploadAudioBlobToDrive({
-            blob: stereoBlob,
-            fileName: `${sanitized}_${savedSession.id.slice(0, 8)}.wav`,
-            sessionTitle: savedSession.title,
-            hostName: savedSession.hostName,
-            guestName: savedSession.guestName,
-            durationSeconds: savedSession.durationSeconds,
-            onProgress: (pct, stage) => {
-              setDriveUpload((prev) => (prev ? { ...prev, isUploading: true, progress: pct, stageText: stage } : null));
-            },
-          }).then((res) => {
-            if (res.success) {
-              if (res.fileUrl) {
-                updateSessionDriveStatus(savedSession.id, res.fileUrl);
-              }
-              setDriveUpload({
-                isUploading: false,
-                progress: 100,
-                stageText: 'Session audio uploaded to Google Drive!',
-                fileUrl: res.fileUrl,
-                sessionTitle: savedSession.title,
-              });
-              setUploadModalPopup({
-                type: 'success',
-                title: 'Audio Uploaded Successfully! 🎉',
-                message: `Your podcast recording "${savedSession.title}" has been saved and automatically uploaded to Google Drive.`,
-                fileUrl: res.fileUrl,
-                sessionTitle: savedSession.title,
-              });
-              window.dispatchEvent(new Event('storage'));
-            } else {
-              setDriveUpload({
-                isUploading: false,
-                progress: 0,
-                stageText: 'Google Drive auto-upload: ' + (res.error || 'Check Drive settings'),
-                error: res.error,
-                sessionTitle: savedSession.title,
-              });
-              setUploadModalPopup({
-                type: 'error',
-                title: 'Google Drive Auto-Upload Notice ⚠️',
-                message: 'Your recording was saved locally in the studio, but auto-upload to Google Drive encountered an issue. You can click "Upload to Google Drive" to retry.',
-                error: res.error,
-                sessionTitle: savedSession.title,
-              });
-            }
-          }).catch((e) => {
-            setDriveUpload({
-              isUploading: false,
-              progress: 0,
-              stageText: 'Google Drive auto-upload failed',
-              error: e?.message || 'Unknown network error',
-              sessionTitle: savedSession.title,
-            });
-            setUploadModalPopup({
-              type: 'error',
-              title: 'Google Drive Auto-Upload Failed ⚠️',
-              message: 'Recording saved locally. Network error prevented automatic Google Drive upload.',
-              error: e?.message || 'Network error',
-              sessionTitle: savedSession.title,
-            });
-          });
-        }
-      } catch (err) {
-        console.error('Failed saving session audio blob:', err);
-      }
+      finalizeAndSaveSession(compiled, bA, bB);
     }
-  }, [currentUser?.id, currentUser?.email, currentUser?.name, currentUser?.adminId, currentUser?.organizationName, markers]);
+  }, [finalizeAndSaveSession]);
 
   const handleAddMarker = useCallback((time: number) => {
     setMarkers((prev) => [
@@ -1074,7 +1148,11 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
                 }}
               />
               <span>
-                {webrtcStatus.connected
+                {guestSyncStatus === 'syncing'
+                  ? `📡 Syncing Guest Studio Master (${guestSyncProgress}%)...`
+                  : guestSyncStatus === 'synced'
+                  ? `✓ Dual-Track Master Synced (Both Stems Active)`
+                  : webrtcStatus.connected
                   ? `Guest Live: ${guestDisplayName} (P2P Call Active)`
                   : 'Guest Standby: Waiting to Join'}
               </span>

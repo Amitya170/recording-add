@@ -140,6 +140,17 @@ export class WebRTCAudioEngine {
   public onStatusChange?: (status: WebRTCStatus) => void;
   public onRemoteStream?: (stream: MediaStream) => void;
   public onSignal?: (message: any) => void;
+  public onAudioBufferReceived?: (pcmData: Float32Array, meta: any) => void;
+  public onTransferProgress?: (percent: number) => void;
+
+  private incomingTransfers = new Map<string, {
+    totalSamples: number;
+    totalChunks: number;
+    chunkSize: number;
+    receivedCount: number;
+    buffer: Float32Array;
+    meta: any;
+  }>();
 
   constructor(role: 'host' | 'guest', sessionToken: string = 'podcastdefaultsession') {
     this.role = role;
@@ -406,15 +417,7 @@ export class WebRTCAudioEngine {
       });
 
       conn.on('data', (data: any) => {
-        if (data?.type === '__ping__') return; // ignore internal keepalive
-        if (data?.type === '__TRACK_UPDATED__') {
-          console.log('[WebRTC] Host: guest updated audio track — refreshing playback & capture');
-          if (this.remoteStream) {
-            this.handleRemoteStream(this.remoteStream, true);
-          }
-          return;
-        }
-        this.onSignal?.(data);
+        this.handleIncomingData(data);
       });
 
       conn.on('close', () => {
@@ -565,15 +568,7 @@ export class WebRTCAudioEngine {
     });
 
     conn.on('data', (data: any) => {
-      if (data?.type === '__ping__') return; // ignore internal keepalive
-      if (data?.type === '__TRACK_UPDATED__') {
-        console.log('[WebRTC] Guest: host updated audio track — refreshing playback');
-        if (this.remoteStream) {
-          this.handleRemoteStream(this.remoteStream, false);
-        }
-        return;
-      }
-      this.onSignal?.(data);
+      this.handleIncomingData(data);
     });
 
     conn.on('close', () => {
@@ -605,7 +600,7 @@ export class WebRTCAudioEngine {
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         });
         this.localStream = guestStream;
-      } catch (err) {
+      } catch {
         console.log('[WebRTC] Guest: local mic stream pending, waiting for user permission before starting media call');
         return;
       }
@@ -711,6 +706,133 @@ export class WebRTCAudioEngine {
         console.warn('[WebRTC] sendSignal error:', e);
       }
     }
+  }
+
+  /**
+   * Internal incoming data processor for WebRTC DataConnection.
+   * Handles audio chunk streaming, track updates, and telemetry before delegating to onSignal.
+   */
+  private handleIncomingData(data: any) {
+    if (data?.type === '__ping__') return;
+
+    if (data?.type === '__AUDIO_TRANSFER_START__') {
+      const { transferId, totalSamples, totalChunks, chunkSize, meta } = data;
+      console.log(`[WebRTC] Starting audio transfer ${transferId}: ${totalSamples} samples, ${totalChunks} chunks`);
+      this.incomingTransfers.set(transferId, {
+        totalSamples,
+        totalChunks,
+        chunkSize,
+        receivedCount: 0,
+        buffer: new Float32Array(totalSamples),
+        meta,
+      });
+      this.onTransferProgress?.(0);
+      return;
+    }
+
+    if (data?.type === '__AUDIO_TRANSFER_CHUNK__') {
+      const { transferId, chunkIndex, chunkData } = data;
+      const transfer = this.incomingTransfers.get(transferId);
+      if (transfer) {
+        const offset = chunkIndex * transfer.chunkSize;
+        const chunk = chunkData instanceof Float32Array
+          ? chunkData
+          : (chunkData instanceof ArrayBuffer ? new Float32Array(chunkData) : new Float32Array(chunkData));
+        transfer.buffer.set(chunk, offset);
+        transfer.receivedCount++;
+        const pct = Math.min(99, Math.round((transfer.receivedCount / transfer.totalChunks) * 100));
+        this.onTransferProgress?.(pct);
+      }
+      return;
+    }
+
+    if (data?.type === '__AUDIO_TRANSFER_END__') {
+      const { transferId } = data;
+      const transfer = this.incomingTransfers.get(transferId);
+      if (transfer) {
+        console.log(`[WebRTC] Completed audio transfer ${transferId} (${transfer.totalSamples} samples)`);
+        this.incomingTransfers.delete(transferId);
+        this.onTransferProgress?.(100);
+        this.onAudioBufferReceived?.(transfer.buffer, transfer.meta);
+      }
+      return;
+    }
+
+    if (data?.type === '__TRACK_UPDATED__') {
+      console.log(`[WebRTC] ${this.role}: peer updated audio track — refreshing playback`);
+      if (this.remoteStream) {
+        this.handleRemoteStream(this.remoteStream, true);
+      }
+      return;
+    }
+
+    this.onSignal?.(data);
+  }
+
+  /**
+   * Transmits raw PCM samples (e.g. from Guest local recording) across the WebRTC DataConnection
+   * in SCTP-safe chunks with backpressure handling and progress updates.
+   */
+  public async sendRecordedAudio(
+    samples: Float32Array,
+    meta: any = {},
+    onProgress?: (percent: number) => void
+  ): Promise<boolean> {
+    if (!this.dataConn || !this.dataConn.open) {
+      console.warn('[WebRTC] Cannot send audio buffer: data connection is closed');
+      return false;
+    }
+
+    const transferId = 'xfer_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+    const CHUNK_SIZE = 16384; // 16,384 floats = 64KB per chunk
+    const totalSamples = samples.length;
+    const totalChunks = Math.ceil(totalSamples / CHUNK_SIZE);
+
+    console.log(`[WebRTC] Transmitting pristine audio buffer: ${totalSamples} samples across ${totalChunks} chunks`);
+
+    // 1. Handshake start
+    this.sendSignal({
+      type: '__AUDIO_TRANSFER_START__',
+      transferId,
+      totalSamples,
+      totalChunks,
+      chunkSize: CHUNK_SIZE,
+      meta,
+    });
+
+    // 2. Stream chunk slices
+    for (let i = 0; i < totalChunks; i++) {
+      if (this.isDisposed || !this.dataConn || !this.dataConn.open) return false;
+
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(totalSamples, start + CHUNK_SIZE);
+      const chunk = samples.subarray(start, end);
+
+      this.dataConn.send({
+        type: '__AUDIO_TRANSFER_CHUNK__',
+        transferId,
+        chunkIndex: i,
+        chunkData: chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength),
+      });
+
+      const pct = Math.round(((i + 1) / totalChunks) * 100);
+      onProgress?.(pct);
+      this.onTransferProgress?.(pct);
+
+      // Yield event loop every 3 chunks to prevent SCTP buffer pressure
+      if (i % 3 === 0) {
+        await new Promise((r) => setTimeout(r, 6));
+      }
+    }
+
+    // 3. Signal transfer completion
+    this.sendSignal({
+      type: '__AUDIO_TRANSFER_END__',
+      transferId,
+    });
+
+    console.log(`[WebRTC] Finished sending audio buffer (${totalChunks} chunks)`);
+    return true;
   }
 
   // ──────────────────────────────────────────────────────────────
