@@ -605,12 +605,13 @@ export class WebRTCAudioEngine {
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         });
         this.localStream = guestStream;
-      } catch {
-        guestStream = getEnsuredAudioStream(this.localStream);
+      } catch (err) {
+        console.log('[WebRTC] Guest: local mic stream pending, waiting for user permission before starting media call');
+        return;
       }
     }
 
-    console.log('[WebRTC] Guest: calling host audio with tracks:', guestStream.getAudioTracks().length);
+    console.log('[WebRTC] Guest: calling host audio with live tracks:', guestStream.getAudioTracks().length);
     const call = this.peer.call(hostId, guestStream);
 
     if (call) {
