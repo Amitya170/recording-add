@@ -1166,6 +1166,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
             <SpeakerPanel
               label="SPEAKER B (GUEST)"
               role="guest"
+              isRemote={true}
               color="amber"
               devices={[]}
               selectedDeviceId=""

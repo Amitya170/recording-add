@@ -6,6 +6,7 @@ import type { AnalysisData } from '../../audio/AnalyserEngine';
 interface SpeakerPanelProps {
   label: string; // "SPEAKER A (HOST)" or "SPEAKER B (GUEST)"
   role: 'host' | 'guest';
+  isRemote?: boolean;
   color: 'cyan' | 'amber';
   devices: DeviceInfo[];
   selectedDeviceId: string;
@@ -30,6 +31,7 @@ interface SpeakerPanelProps {
 export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
   label,
   role,
+  isRemote = false,
   color,
   devices,
   selectedDeviceId,
@@ -240,9 +242,9 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
           <label style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.5px' }}>
-            {role === 'guest' ? 'AUDIO SOURCE' : 'MIC INPUT HARDWARE'}
+            {isRemote ? 'AUDIO SOURCE' : 'MIC INPUT HARDWARE'}
           </label>
-          {role === 'guest' ? (
+          {isRemote ? (
             <div
               className="daw-select"
               style={{
