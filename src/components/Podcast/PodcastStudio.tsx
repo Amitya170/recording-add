@@ -148,15 +148,11 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
   useEffect(() => {
     const unlockAllAudio = async () => {
       // 1. Resume AudioContexts if suspended by browser
-      if (engineA.current?.audioContext?.state === 'suspended') {
-        try { await engineA.current.audioContext.resume(); } catch {}
+      if (engineA.current) {
+        await engineA.current.resumeAudio();
       }
-      if (engineB.current?.audioContext?.state === 'suspended') {
-        try { await engineB.current.audioContext.resume(); } catch {}
-      }
-      // 2. Play remote audio element
-      if (remoteAudioRef.current && remoteAudioRef.current.srcObject) {
-        try { await remoteAudioRef.current.play(); } catch {}
+      if (engineB.current) {
+        await engineB.current.resumeAudio();
       }
     };
     window.addEventListener('click', unlockAllAudio);
@@ -266,23 +262,19 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         t.enabled = true;
       });
 
-      // 1. Attach to audio element for hardware Opus decoding
+      // 1. Keep audio element muted as WebKit background stream anchor (prevents double audio)
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
-        remoteAudioRef.current.volume = 1.0;
-        remoteAudioRef.current.muted = false;
+        remoteAudioRef.current.muted = true;
+        remoteAudioRef.current.volume = 0;
         try {
           await remoteAudioRef.current.play();
-          console.log('[Host] Remote guest audio playback started');
-        } catch (e) {
-          console.warn('[Host] Remote audio playback waiting for click:', e);
-        }
+        } catch {}
       }
 
-      // 2. Attach to engineB for real-time waveform visualization & PCM multi-track recording
+      // 2. Attach to engineB for real-time live monitoring (Host hears Guest aloud) & PCM multi-track recording
       if (engineB.current) {
-        // Feed the WebRTC stream directly into the Web Audio API graph.
-        // (The <audio> tag above guarantees that Chromium keeps the stream active and decoded).
+        await engineB.current.resumeAudio();
         await engineB.current.startMediaStream(remoteStream);
         setIsConnectedB(true);
         if (isRecordingRef.current) {
@@ -293,9 +285,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     webrtcEngine.current = rEngine;
 
     // Host mic: no self monitor (prevents hearing own voice).
-    // Guest incoming: remoteAudioRef handles playback directly to prevent AEC echo cancellation suppression.
+    // Guest incoming: monitorOutput = true so Host hears Guest through speakers/headphones!
     const eA = new SpeakerAudioEngine('Speaker A (Host)', false);
-    const eB = new SpeakerAudioEngine('Speaker B (Guest)', false);
+    const eB = new SpeakerAudioEngine('Speaker B (Guest)', true);
     engineA.current = eA;
     engineB.current = eB;
 

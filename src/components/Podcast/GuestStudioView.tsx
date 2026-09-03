@@ -121,21 +121,19 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
         t.enabled = true;
       });
 
-      // 1. Attach to audio element for hardware Opus decoding
+      // 1. Keep audio element muted as WebKit background stream anchor (prevents double audio)
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
-        remoteAudioRef.current.volume = 1.0;
-        remoteAudioRef.current.muted = false;
+        remoteAudioRef.current.muted = true;
+        remoteAudioRef.current.volume = 0;
         try {
           await remoteAudioRef.current.play();
-          console.log('[GuestStudio] Host audio playback started');
-        } catch (e) {
-          console.warn('[GuestStudio] Autoplay waiting for click interaction:', e);
-        }
+        } catch {}
       }
 
-      // 2. Connect to engine for live waveform metering & visualizer
+      // 2. Connect to engineHostIncoming for live monitoring (Guest hears Host aloud) & visualizer
       if (engineHostIncoming.current) {
+        await engineHostIncoming.current.resumeAudio();
         await engineHostIncoming.current.startMediaStream(remoteStream);
       }
     };
@@ -155,9 +153,9 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     webrtcEngine.current = rEngine;
 
     // Guest own mic: no monitor (prevents hearing own voice).
-    // Host incoming: remoteAudioRef handles playback directly to prevent AEC echo cancellation suppression.
+    // Host incoming: monitorOutput = true so Guest hears Host through speakers/headphones!
     const engine = new SpeakerAudioEngine('Guest Speaker', false);
-    const eHost = new SpeakerAudioEngine('Host Speaker (Incoming)', false);
+    const eHost = new SpeakerAudioEngine('Host Speaker (Incoming)', true);
     engineGuest.current = engine;
     engineHostIncoming.current = eHost;
 
@@ -220,16 +218,12 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
   // Global interaction audio unlocker (required for Mobile iOS Safari & Android Chrome)
   useEffect(() => {
     const unlockAllAudio = async () => {
-      // 1. Resume AudioContexts if suspended by mobile browser power-saver
-      if (engineGuest.current?.audioContext?.state === 'suspended') {
-        try { await engineGuest.current.audioContext.resume(); } catch {}
+      // 1. Resume AudioContexts if suspended by browser
+      if (engineGuest.current) {
+        await engineGuest.current.resumeAudio();
       }
-      if (engineHostIncoming.current?.audioContext?.state === 'suspended') {
-        try { await engineHostIncoming.current.audioContext.resume(); } catch {}
-      }
-      // 2. Play remote audio element
-      if (remoteAudioRef.current && remoteAudioRef.current.srcObject) {
-        try { await remoteAudioRef.current.play(); } catch {}
+      if (engineHostIncoming.current) {
+        await engineHostIncoming.current.resumeAudio();
       }
     };
     window.addEventListener('click', unlockAllAudio);

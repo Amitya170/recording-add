@@ -86,9 +86,7 @@ export class SpeakerAudioEngine {
     this.gainNode.connect(this.analyserEngine.node);
 
     // If monitoring is enabled (e.g. for remote audio), connect gainNode to speakers
-    if (this.monitorOutput) {
-      this.gainNode.connect(this.ctx.destination);
-    }
+    this.ensureMonitoringConnection();
 
     return this.ctx;
   }
@@ -217,14 +215,31 @@ export class SpeakerAudioEngine {
       this.sourceNode.connect(this.gainNode!);
       this.gainNode!.connect(this.analyserEngine!.node);
 
-      // If monitoring is enabled (e.g. for remote guest audio), connect to speakers/headphones
-      if (this.monitorOutput) {
-        this.gainNode!.connect(this.ctx.destination);
-      }
+      // If monitoring is enabled (e.g. for remote audio), connect to speakers/headphones
+      this.ensureMonitoringConnection();
     }
 
     this.setupAudioCaptureNode();
     this.applyMuteState();
+  }
+
+  public setMonitorOutput(enabled: boolean): void {
+    this.monitorOutput = enabled;
+    this.ensureMonitoringConnection();
+  }
+
+  private ensureMonitoringConnection(): void {
+    if (!this.ctx || !this.gainNode) return;
+    try {
+      this.gainNode.disconnect(this.ctx.destination);
+    } catch {}
+    if (this.monitorOutput) {
+      try {
+        this.gainNode.connect(this.ctx.destination);
+      } catch (e) {
+        console.warn(`[AudioEngine] Failed to connect ${this.speakerLabel} to destination:`, e);
+      }
+    }
   }
 
   private setupAudioCaptureNode() {
@@ -423,6 +438,17 @@ export class SpeakerAudioEngine {
 
   public get audioContext(): AudioContext | null {
     return this.ctx;
+  }
+
+  public async resumeAudio(): Promise<void> {
+    if (this.ctx && this.ctx.state === 'suspended') {
+      try {
+        await this.ctx.resume();
+        console.log(`[AudioEngine] Resumed AudioContext for ${this.speakerLabel}`);
+      } catch (e) {
+        console.warn(`[AudioEngine] Failed to resume AudioContext for ${this.speakerLabel}:`, e);
+      }
+    }
   }
 
   public dispose() {

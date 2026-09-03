@@ -448,7 +448,7 @@ export class WebRTCAudioEngine {
 
       call.on('stream', (remoteStream) => {
         console.log('[WebRTC] Host: received guest audio stream via call.on(stream)');
-        this.handleRemoteStream(remoteStream, true);
+        this.handleRemoteStream(remoteStream, false);
       });
 
       // Attach unified ICE diagnostics with proper restart
@@ -457,7 +457,7 @@ export class WebRTCAudioEngine {
         pc.ontrack = (event) => {
           console.log('[WebRTC] Host: received guest audio track via pc.ontrack');
           const stream = event.streams[0] || new MediaStream([event.track]);
-          this.handleRemoteStream(stream, true);
+          this.handleRemoteStream(stream, false);
         };
 
         this.attachIceDiagnostics(pc, 'Host');
@@ -549,14 +549,19 @@ export class WebRTCAudioEngine {
     this.dataConn = conn;
 
     conn.on('open', () => {
-      console.log('[WebRTC] Guest: data channel OPEN with host — now initiating audio call');
+      console.log('[WebRTC] Guest: data channel OPEN with host');
       this.isConnecting = false;
       this.guestRetryBackoffMs = WebRTCAudioEngine.GUEST_RETRY_MIN_MS;
       this.stopGuestCallLoop();
-      this.updateStatus('Connected to Host ✓ (P2P Call Active)', true);
+      this.updateStatus('Signaling Connected — Establishing Live Audio…', false);
 
-      // 2. Audio Media Call (Initiated cleanly after data channel is established)
-      this.startMediaCall(hostId);
+      // If local microphone stream is already active, initiate audio media call immediately.
+      // If localStream is not ready yet, setLocalStream() will initiate startMediaCall() once mic is granted.
+      if (this.localStream && this.localStream.getAudioTracks().length > 0 && this.localStream.getAudioTracks()[0].readyState === 'live') {
+        this.startMediaCall(hostId);
+      } else {
+        console.log('[WebRTC] Guest: data channel ready, waiting for local microphone before starting media call');
+      }
     });
 
     conn.on('data', (data: any) => {
@@ -564,7 +569,7 @@ export class WebRTCAudioEngine {
       if (data?.type === '__TRACK_UPDATED__') {
         console.log('[WebRTC] Guest: host updated audio track — refreshing playback');
         if (this.remoteStream) {
-          this.handleRemoteStream(this.remoteStream, true);
+          this.handleRemoteStream(this.remoteStream, false);
         }
         return;
       }
@@ -587,6 +592,10 @@ export class WebRTCAudioEngine {
 
   private async startMediaCall(hostId: string) {
     if (!this.peer || this.peer.destroyed || this.isDisposed) return;
+    if (this.mediaConn && this.mediaConn.open) {
+      console.log('[WebRTC] Media call already active, skipping startMediaCall');
+      return;
+    }
     try { this.mediaConn?.close(); } catch {}
 
     let guestStream = this.localStream;
@@ -611,7 +620,7 @@ export class WebRTCAudioEngine {
         console.log('[WebRTC] Guest: received host audio stream via call.on(stream)');
         this.isConnecting = false;
         this.stopGuestCallLoop();
-        this.handleRemoteStream(remoteStream, true);
+        this.handleRemoteStream(remoteStream, false);
       });
 
       const pc = (call as any).peerConnection as RTCPeerConnection;
@@ -621,7 +630,7 @@ export class WebRTCAudioEngine {
           const stream = event.streams[0] || new MediaStream([event.track]);
           this.isConnecting = false;
           this.stopGuestCallLoop();
-          this.handleRemoteStream(stream, true);
+          this.handleRemoteStream(stream, false);
         };
 
         this.attachIceDiagnostics(pc, 'Guest');
@@ -646,7 +655,7 @@ export class WebRTCAudioEngine {
 
   /**
    * Updates the microphone stream.
-   * Immediately starts or updates the audio call with the live stream.
+   * Seamlessly replaces the active audio track without destroying the call.
    */
   public async setLocalStream(stream: MediaStream): Promise<void> {
     this.localStream = stream;
@@ -660,15 +669,16 @@ export class WebRTCAudioEngine {
     if (this.lastLocalTrackId === audioTrack.id) return;
     this.lastLocalTrackId = audioTrack.id;
 
-    // If Guest and data channel is open, initiate/re-establish media call with live mic stream
+    // If Guest, data channel is open, and no media call exists yet: initiate media call with live mic stream
     if (this.role === 'guest' && this.peer && !this.peer.destroyed && !this.isDisposed) {
-      if (this.dataConn && this.dataConn.open) {
+      if (this.dataConn && this.dataConn.open && !this.mediaConn) {
         const hostId = `pcshost${this.sessionToken}`;
-        this.startMediaCall(hostId);
+        await this.startMediaCall(hostId);
+        return;
       }
     }
 
-    // Replace track on existing sender if already connected
+    // Replace track on existing sender without tearing down the connection
     if (this.mediaConn) {
       const pc = (this.mediaConn as unknown as { peerConnection?: RTCPeerConnection }).peerConnection;
       if (pc) {
