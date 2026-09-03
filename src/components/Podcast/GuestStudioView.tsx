@@ -121,17 +121,20 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
         t.enabled = true;
       });
 
-      // 1. Keep audio element muted as WebKit background stream anchor (prevents double audio)
+      // 1. Hardware Opus Audio Playback via HTML5 Audio Element (Must be unmuted with volume > 0 so Chromium decodes WebRTC audio)
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
-        remoteAudioRef.current.muted = true;
-        remoteAudioRef.current.volume = 0;
+        remoteAudioRef.current.muted = false;
+        remoteAudioRef.current.volume = 1.0;
         try {
           await remoteAudioRef.current.play();
-        } catch {}
+          console.log('[GuestStudio] Host audio playback started');
+        } catch (e) {
+          console.warn('[GuestStudio] Host audio playback waiting for click:', e);
+        }
       }
 
-      // 2. Connect to engineHostIncoming for live monitoring (Guest hears Host aloud) & visualizer
+      // 2. Connect to engineHostIncoming for live waveform metering & visualizer
       if (engineHostIncoming.current) {
         await engineHostIncoming.current.resumeAudio();
         await engineHostIncoming.current.startMediaStream(remoteStream);
@@ -153,9 +156,10 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     webrtcEngine.current = rEngine;
 
     // Guest own mic: no monitor (prevents hearing own voice).
-    // Host incoming: monitorOutput = true so Guest hears Host through speakers/headphones!
+    // Host incoming: remoteAudioRef handles playback to speakers directly (hardware Opus decoding).
+    // eHost handles metering & visualizer without double playback to speakers (monitorOutput: false).
     const engine = new SpeakerAudioEngine('Guest Speaker', false);
-    const eHost = new SpeakerAudioEngine('Host Speaker (Incoming)', true);
+    const eHost = new SpeakerAudioEngine('Host Speaker (Incoming)', false);
     engineGuest.current = engine;
     engineHostIncoming.current = eHost;
 
@@ -224,6 +228,12 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
       }
       if (engineHostIncoming.current) {
         await engineHostIncoming.current.resumeAudio();
+      }
+      // 2. Play remote audio element unmuted
+      if (remoteAudioRef.current && remoteAudioRef.current.srcObject) {
+        remoteAudioRef.current.muted = false;
+        remoteAudioRef.current.volume = 1.0;
+        try { await remoteAudioRef.current.play(); } catch {}
       }
     };
     window.addEventListener('click', unlockAllAudio);

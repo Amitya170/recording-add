@@ -275,7 +275,7 @@ export class SpeakerAudioEngine {
             this.meterCallback({ peak, rms });
           }
 
-          if (this.isRecording && !this.isPaused && !this.isMuted && buffer) {
+          if (this.isRecording && !this.isPaused && buffer) {
             const chunk = new Float32Array(buffer);
             this.recordedChunks.push(chunk);
             this.totalSamples += chunk.length;
@@ -312,7 +312,7 @@ export class SpeakerAudioEngine {
         this.meterCallback({ peak, rms });
       }
 
-      if (this.isRecording && !this.isPaused && !this.isMuted) {
+      if (this.isRecording && !this.isPaused) {
         this.recordedChunks.push(processed);
         this.totalSamples += processed.length;
       }

@@ -73,6 +73,12 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
   const [isMutedB, setIsMutedB] = useState(false);
   const [gainA, setGainA] = useState(1.0);
   const [gainB, setGainB] = useState(1.0);
+  const isMutedBRef = useRef(isMutedB);
+  const gainBRef = useRef(gainB);
+  useEffect(() => {
+    isMutedBRef.current = isMutedB;
+    gainBRef.current = gainB;
+  }, [isMutedB, gainB]);
   const [soloA, setSoloA] = useState(false);
   const [soloB, setSoloB] = useState(false);
   const [vocalPresetA, setVocalPresetA] = useState('warm');
@@ -153,6 +159,12 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       }
       if (engineB.current) {
         await engineB.current.resumeAudio();
+      }
+      // 2. Play remote audio element unmuted so Chrome decodes WebRTC audio stream
+      if (remoteAudioRef.current && remoteAudioRef.current.srcObject) {
+        remoteAudioRef.current.muted = false;
+        remoteAudioRef.current.volume = isMutedBRef.current ? 0 : Math.min(1, Math.max(0, gainBRef.current));
+        try { await remoteAudioRef.current.play(); } catch {}
       }
     };
     window.addEventListener('click', unlockAllAudio);
@@ -262,17 +274,20 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         t.enabled = true;
       });
 
-      // 1. Keep audio element muted as WebKit background stream anchor (prevents double audio)
+      // 1. Hardware Opus Audio Playback via HTML5 Audio Element (Must be unmuted with volume > 0 so Chromium decodes WebRTC audio)
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
-        remoteAudioRef.current.muted = true;
-        remoteAudioRef.current.volume = 0;
+        remoteAudioRef.current.muted = false;
+        remoteAudioRef.current.volume = isMutedBRef.current ? 0 : Math.min(1, Math.max(0, gainBRef.current));
         try {
           await remoteAudioRef.current.play();
-        } catch {}
+          console.log('[Host] Remote guest audio playback started');
+        } catch (e) {
+          console.warn('[Host] Remote audio playback waiting for click:', e);
+        }
       }
 
-      // 2. Attach to engineB for real-time live monitoring (Host hears Guest aloud) & PCM multi-track recording
+      // 2. Attach to engineB for real-time waveform visualization & PCM multi-track recording
       if (engineB.current) {
         await engineB.current.resumeAudio();
         await engineB.current.startMediaStream(remoteStream);
@@ -285,9 +300,10 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     webrtcEngine.current = rEngine;
 
     // Host mic: no self monitor (prevents hearing own voice).
-    // Guest incoming: monitorOutput = true so Host hears Guest through speakers/headphones!
+    // Guest incoming: remoteAudioRef handles playback to speakers directly (hardware Opus decoding).
+    // engineB handles metering & PCM recording without double playback to speakers (monitorOutput: false).
     const eA = new SpeakerAudioEngine('Speaker A (Host)', false);
-    const eB = new SpeakerAudioEngine('Speaker B (Guest)', true);
+    const eB = new SpeakerAudioEngine('Speaker B (Guest)', false);
     engineA.current = eA;
     engineB.current = eB;
 
@@ -426,6 +442,14 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     }
     engineA.current?.startRecording();
     engineB.current?.startRecording();
+
+    // Ensure remote audio playback is active when recording starts
+    if (remoteAudioRef.current && remoteAudioRef.current.srcObject) {
+      remoteAudioRef.current.muted = false;
+      remoteAudioRef.current.volume = isMutedBRef.current ? 0 : Math.min(1, Math.max(0, gainBRef.current));
+      try { await remoteAudioRef.current.play(); } catch {}
+    }
+
     elapsedRef.current = 0;
     setIsRecording(true);
     setIsPaused(false);

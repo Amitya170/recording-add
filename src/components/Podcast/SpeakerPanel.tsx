@@ -240,19 +240,39 @@ export const SpeakerPanel: React.FC<SpeakerPanelProps> = ({
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
           <label style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.5px' }}>
-            MIC INPUT HARDWARE
+            {role === 'guest' ? 'AUDIO SOURCE' : 'MIC INPUT HARDWARE'}
           </label>
-          <select
-            className="daw-select"
-            value={selectedDeviceId}
-            onChange={(e) => onDeviceChange(e.target.value)}
-            style={{ width: '100%', fontSize: '0.75rem' }}
-          >
-            <option value="">Select Microphone Input...</option>
-            {devices.map((d) => (
-              <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
-            ))}
-          </select>
+          {role === 'guest' ? (
+            <div
+              className="daw-select"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                height: '34px',
+                fontSize: '0.75rem',
+                color: isConnected ? 'var(--accent-green)' : 'var(--text-muted)',
+                background: 'rgba(255,255,255,0.04)',
+                border: isConnected ? '1px solid rgba(0,255,135,0.3)' : '1px solid var(--border-dim)',
+                cursor: 'default',
+              }}
+            >
+              <Radio size={13} color={isConnected ? 'var(--accent-green)' : 'var(--accent-amber)'} />
+              <span>{isConnected ? '📡 Remote WebRTC (Guest Mic)' : 'Waiting for Remote Guest...'}</span>
+            </div>
+          ) : (
+            <select
+              className="daw-select"
+              value={selectedDeviceId}
+              onChange={(e) => onDeviceChange(e.target.value)}
+              style={{ width: '100%', fontSize: '0.75rem' }}
+            >
+              <option value="">Select Microphone Input...</option>
+              {devices.map((d) => (
+                <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
+              ))}
+            </select>
+          )}
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
