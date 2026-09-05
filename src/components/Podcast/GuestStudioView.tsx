@@ -198,6 +198,7 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     // eHost handles metering & visualizer without double playback to speakers (monitorOutput: false).
     const engine = new SpeakerAudioEngine('Guest Speaker', false);
     const eHost = new SpeakerAudioEngine('Host Speaker (Incoming)', true);
+    eHost.setMonitorOutput(true);
     engineGuest.current = engine;
     engineHostIncoming.current = eHost;
 

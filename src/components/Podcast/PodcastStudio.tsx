@@ -350,6 +350,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     // Guest incoming: remoteAudioRef handles playback to speakers directly (hardware Opus decoding).
     // engineB handles metering & PCM recording without double playback to speakers (monitorOutput: false).
     const eA = new SpeakerAudioEngine('Speaker A (Host)', true);
+    eA.setMonitorOutput(true);
     const eB = new SpeakerAudioEngine('Speaker B (Guest)', false);
     engineA.current = eA;
     engineB.current = eB;
