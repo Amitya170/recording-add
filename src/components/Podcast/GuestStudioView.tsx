@@ -197,7 +197,7 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     // Host incoming: remoteAudioRef handles playback to speakers directly (hardware Opus decoding).
     // eHost handles metering & visualizer without double playback to speakers (monitorOutput: false).
     const engine = new SpeakerAudioEngine('Guest Speaker', false);
-    const eHost = new SpeakerAudioEngine('Host Speaker (Incoming)', false);
+    const eHost = new SpeakerAudioEngine('Host Speaker (Incoming)', true);
     engineGuest.current = engine;
     engineHostIncoming.current = eHost;
 
