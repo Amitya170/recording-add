@@ -26,8 +26,8 @@
 
 ```bash
 # Clone repository
-git clone https://github.com/Amitya170/Audio-recording-.git
-cd Audio-recording-
+git clone https://github.com/Amitya170/recording-add.git
+cd recording-add
 
 # Install dependencies
 npm install
