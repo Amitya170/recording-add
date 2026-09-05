@@ -160,17 +160,16 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
   // Global interaction audio unlocker (required for Mobile iOS Safari & Android Chrome)
   useEffect(() => {
     const unlockAllAudio = async () => {
-      // 1. Resume AudioContexts if suspended by browser
+      // Resume AudioContexts if suspended by browser autoplay policy.
+      // Once resumed, Web Audio monitoring connections play automatically.
       if (engineA.current) {
         await engineA.current.resumeAudio();
       }
       if (engineB.current) {
         await engineB.current.resumeAudio();
       }
-      // 2. Play remote audio element unmuted so Chrome decodes WebRTC audio stream
-      if (remoteAudioRef.current && remoteAudioRef.current.srcObject) {
-        remoteAudioRef.current.muted = false;
-        remoteAudioRef.current.volume = isMutedBRef.current ? 0 : Math.min(1, Math.max(0, gainBRef.current));
+      // Keep <audio> element playing (muted) as stream anchor
+      if (remoteAudioRef.current && remoteAudioRef.current.srcObject && remoteAudioRef.current.paused) {
         try { await remoteAudioRef.current.play(); } catch {}
       }
     };
@@ -281,30 +280,28 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         t.enabled = true;
       });
 
-      // 1. Hardware Opus Audio Playback via HTML5 Audio Element (Must be unmuted with volume > 0 so Chromium decodes WebRTC audio)
+      // 1. Keep <audio> element as stream anchor (prevents Chrome GC of WebRTC stream)
+      //    but MUTE it — Web Audio API handles actual speaker playback via engineB (monitorOutput=true).
+      //    This avoids Chrome's autoplay policy blocking <audio>.play() outside user gestures.
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
-        remoteAudioRef.current.muted = false;
-        remoteAudioRef.current.volume = isMutedBRef.current ? 0 : Math.min(1, Math.max(0, gainBRef.current));
-        remoteAudioRef.current.oncanplay = () => {
-          remoteAudioRef.current?.play().catch((e) => console.warn('[Host] oncanplay play error:', e));
-        };
-        try {
-          await remoteAudioRef.current.play();
-          console.log('[Host] Remote guest audio playback started');
-        } catch (e) {
-          console.warn('[Host] Remote audio playback waiting for click:', e);
-        }
+        remoteAudioRef.current.muted = true;
+        remoteAudioRef.current.volume = 0;
+        // Still attempt play() to keep the stream active in Chrome
+        try { await remoteAudioRef.current.play(); } catch {}
       }
 
-      // 2. Attach to engineB for real-time waveform visualization & PCM multi-track recording
+      // 2. Attach to engineB for speaker playback (via monitorOutput), waveform visualization & PCM recording
       if (engineB.current) {
         await engineB.current.resumeAudio();
         await engineB.current.startMediaStream(remoteStream);
+        // Apply current monitor volume setting
+        engineB.current.setMonitorGain(isMutedBRef.current ? 0 : Math.min(1, Math.max(0, gainBRef.current)));
         setIsConnectedB(true);
         if (isRecordingRef.current) {
           engineB.current.startRecording();
         }
+        console.log('[Host] Guest audio routed through Web Audio API to speakers');
       }
     };
 
@@ -346,12 +343,11 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
     webrtcEngine.current = rEngine;
 
-    // Host mic: no self monitor (prevents hearing own voice).
-    // Guest incoming: remoteAudioRef handles playback to speakers directly (hardware Opus decoding).
-    // engineB handles metering & PCM recording without double playback to speakers (monitorOutput: false).
-    const eA = new SpeakerAudioEngine('Speaker A (Host)', true);
-    eA.setMonitorOutput(true);
-    const eB = new SpeakerAudioEngine('Speaker B (Guest)', false);
+    // Host mic: no self monitor (prevents hearing own voice / feedback).
+    // Guest incoming: monitorOutput=true routes guest audio to speakers via Web Audio API.
+    // This is more reliable than <audio>.play() which Chrome blocks without a user gesture.
+    const eA = new SpeakerAudioEngine('Speaker A (Host)', false);
+    const eB = new SpeakerAudioEngine('Speaker B (Guest)', true);
     engineA.current = eA;
     engineB.current = eB;
 
@@ -491,12 +487,8 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     engineA.current?.startRecording();
     engineB.current?.startRecording();
 
-    // Ensure remote audio playback is active when recording starts
-    if (remoteAudioRef.current && remoteAudioRef.current.srcObject) {
-      remoteAudioRef.current.muted = false;
-      remoteAudioRef.current.volume = isMutedBRef.current ? 0 : Math.min(1, Math.max(0, gainBRef.current));
-      try { await remoteAudioRef.current.play(); } catch {}
-    }
+    // Ensure Web Audio is active when recording starts
+    await engineB.current?.resumeAudio();
 
     elapsedRef.current = 0;
     setIsRecording(true);
@@ -889,19 +881,10 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     if (engineB.current) {
       const muted = engineB.current.toggleMute();
       setIsMutedB(muted);
-      if (remoteAudioRef.current) {
-        remoteAudioRef.current.muted = muted;
-        remoteAudioRef.current.volume = muted ? 0 : Math.min(1, Math.max(0, gainB));
-      }
+      // Control speaker playback via Web Audio monitor gain (not <audio> element)
+      engineB.current.setMonitorGain(muted ? 0 : Math.min(1, Math.max(0, gainB)));
     } else {
-      setIsMutedB((prev) => {
-        const next = !prev;
-        if (remoteAudioRef.current) {
-          remoteAudioRef.current.muted = next;
-          remoteAudioRef.current.volume = next ? 0 : Math.min(1, Math.max(0, gainB));
-        }
-        return next;
-      });
+      setIsMutedB((prev) => !prev);
     }
   };
 
@@ -913,9 +896,8 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
   const handleGainChangeB = (val: number) => {
     setGainB(val);
     engineB.current?.setGain(val);
-    if (remoteAudioRef.current) {
-      remoteAudioRef.current.volume = isMutedB ? 0 : Math.min(1, Math.max(0, val));
-    }
+    // Control speaker playback via Web Audio monitor gain (not <audio> element)
+    engineB.current?.setMonitorGain(isMutedB ? 0 : Math.min(1, Math.max(0, val)));
   };
 
   const handlePresetChangeA = (preset: string) => {

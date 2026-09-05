@@ -127,26 +127,21 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
         t.enabled = true;
       });
 
-      // 1. Hardware Opus Audio Playback via HTML5 Audio Element (Must be unmuted with volume > 0 so Chromium decodes WebRTC audio)
+      // 1. Keep <audio> element as stream anchor (prevents Chrome GC of WebRTC stream)
+      //    but MUTE it — Web Audio API handles actual speaker playback via engineHostIncoming (monitorOutput=true).
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
-        remoteAudioRef.current.muted = false;
-        remoteAudioRef.current.volume = 1.0;
-        remoteAudioRef.current.oncanplay = () => {
-          remoteAudioRef.current?.play().catch((e) => console.warn('[GuestStudio] oncanplay play error:', e));
-        };
-        try {
-          await remoteAudioRef.current.play();
-          console.log('[GuestStudio] Host audio playback started');
-        } catch (e) {
-          console.warn('[GuestStudio] Host audio playback waiting for click:', e);
-        }
+        remoteAudioRef.current.muted = true;
+        remoteAudioRef.current.volume = 0;
+        // Still attempt play() to keep the stream active in Chrome
+        try { await remoteAudioRef.current.play(); } catch {}
       }
 
-      // 2. Connect to engineHostIncoming for live waveform metering & visualizer
+      // 2. Attach to engineHostIncoming for speaker playback (via monitorOutput), waveform metering & visualizer
       if (engineHostIncoming.current) {
         await engineHostIncoming.current.resumeAudio();
         await engineHostIncoming.current.startMediaStream(remoteStream);
+        console.log('[GuestStudio] Host audio routed through Web Audio API to speakers');
       }
     };
     rEngine.onSignal = async (sig: any) => {
@@ -193,12 +188,11 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     };
     webrtcEngine.current = rEngine;
 
-    // Guest own mic: no monitor (prevents hearing own voice).
-    // Host incoming: remoteAudioRef handles playback to speakers directly (hardware Opus decoding).
-    // eHost handles metering & visualizer without double playback to speakers (monitorOutput: false).
+    // Guest own mic: no monitor (prevents hearing own voice / feedback).
+    // Host incoming: monitorOutput=true routes host audio to speakers via Web Audio API.
+    // This is more reliable than <audio>.play() which Chrome blocks without a user gesture.
     const engine = new SpeakerAudioEngine('Guest Speaker', false);
     const eHost = new SpeakerAudioEngine('Host Speaker (Incoming)', true);
-    eHost.setMonitorOutput(true);
     engineGuest.current = engine;
     engineHostIncoming.current = eHost;
 
@@ -261,17 +255,16 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
   // Global interaction audio unlocker (required for Mobile iOS Safari & Android Chrome)
   useEffect(() => {
     const unlockAllAudio = async () => {
-      // 1. Resume AudioContexts if suspended by browser
+      // Resume AudioContexts if suspended by browser autoplay policy.
+      // Once resumed, Web Audio monitoring connections play automatically.
       if (engineGuest.current) {
         await engineGuest.current.resumeAudio();
       }
       if (engineHostIncoming.current) {
         await engineHostIncoming.current.resumeAudio();
       }
-      // 2. Play remote audio element unmuted
-      if (remoteAudioRef.current && remoteAudioRef.current.srcObject) {
-        remoteAudioRef.current.muted = false;
-        remoteAudioRef.current.volume = 1.0;
+      // Keep <audio> element playing (muted) as stream anchor
+      if (remoteAudioRef.current && remoteAudioRef.current.srcObject && remoteAudioRef.current.paused) {
         try { await remoteAudioRef.current.play(); } catch {}
       }
     };

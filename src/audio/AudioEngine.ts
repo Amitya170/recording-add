@@ -30,6 +30,7 @@ export class SpeakerAudioEngine {
   private workletNode: AudioWorkletNode | null = null;
   private isWorkletActive = false;
   private silentSink: GainNode | null = null;
+  private monitorGainNode: GainNode | null = null;
 
   private isRecording = false;
   private isPaused = false;
@@ -79,6 +80,10 @@ export class SpeakerAudioEngine {
     this.analyserEngine = new AnalyserEngine(this.ctx, 2048);
     this.gainNode = this.ctx.createGain();
     this.gainNode.gain.value = this.userGain;
+
+    // Separate monitoring gain node for speaker playback (independent of recording level)
+    this.monitorGainNode = this.ctx.createGain();
+    this.monitorGainNode.gain.value = 1.0;
 
     // Chain: NoiseSuppression -> FxRack -> GainNode -> AnalyserEngine
     this.noiseEngine.outputNode.connect(this.fxRack.inputNode);
@@ -269,14 +274,45 @@ export class SpeakerAudioEngine {
     this.ensureMonitoringConnection();
   }
 
+  /**
+   * Sets playback volume for monitoring (0.0 to 2.0).
+   * Independent of recording gain — only affects speaker output.
+   */
+  public setMonitorGain(val: number): void {
+    const clamped = Math.max(0, Math.min(2, val));
+    if (this.monitorGainNode) {
+      if (this.ctx) {
+        try {
+          this.monitorGainNode.gain.cancelScheduledValues(this.ctx.currentTime);
+          this.monitorGainNode.gain.setValueAtTime(clamped, this.ctx.currentTime);
+        } catch {
+          this.monitorGainNode.gain.value = clamped;
+        }
+      } else {
+        this.monitorGainNode.gain.value = clamped;
+      }
+    }
+  }
+
+  /**
+   * Mutes or unmutes the monitoring path (speaker playback).
+   */
+  public setMonitorMuted(muted: boolean): void {
+    if (this.monitorGainNode) {
+      this.monitorGainNode.gain.value = muted ? 0 : 1.0;
+    }
+  }
+
   private ensureMonitoringConnection(): void {
-    if (!this.ctx || !this.gainNode) return;
-    try {
-      this.gainNode.disconnect(this.ctx.destination);
-    } catch {}
+    if (!this.ctx || !this.gainNode || !this.monitorGainNode) return;
+    // Disconnect any existing monitoring path
+    try { this.monitorGainNode.disconnect(this.ctx.destination); } catch {}
+    try { this.gainNode.disconnect(this.monitorGainNode); } catch {}
     if (this.monitorOutput) {
       try {
-        this.gainNode.connect(this.ctx.destination);
+        this.gainNode.connect(this.monitorGainNode);
+        this.monitorGainNode.connect(this.ctx.destination);
+        console.log(`[AudioEngine] ${this.speakerLabel}: monitoring connected to speakers`);
       } catch (e) {
         console.warn(`[AudioEngine] Failed to connect ${this.speakerLabel} to destination:`, e);
       }
@@ -528,6 +564,10 @@ export class SpeakerAudioEngine {
     if (this.scriptNode) {
       this.scriptNode.disconnect();
       this.scriptNode = null;
+    }
+    if (this.monitorGainNode) {
+      try { this.monitorGainNode.disconnect(); } catch {}
+      this.monitorGainNode = null;
     }
     if (this.stream) {
       this.stream.getTracks().forEach((t) => t.stop());
