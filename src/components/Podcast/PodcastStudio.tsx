@@ -773,13 +773,16 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     // Signal Guest to stop and transmit its pristine double-ender PCM
     webrtcEngine.current?.sendSignal({ type: 'RECORDING_STATE', isRecording: false });
 
-    // If Guest is connected, trigger sync status
+    // If Guest is connected, trigger sync status and wait for PCM transfer
     if (webrtcEngine.current?.isConnected) {
       setGuestSyncStatus('syncing');
       setGuestSyncProgress(0);
       console.log('[Host] Waiting for Guest pristine Double-Ender audio transfer...');
+      // Do not compile now; will compile when Guest PCM arrives via onAudioBufferReceived.
+      return;
     }
 
+    // No Guest connection; compile immediately using available buffers
     let compiled: AudioBuffer | null = null;
     if (bA && bB && engineA.current?.audioContext) {
       compiled = mergeToStereo(engineA.current.audioContext, bA, bB);

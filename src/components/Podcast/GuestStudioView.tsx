@@ -163,12 +163,13 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
             setSyncStatus('idle');
           }
         } else {
+          // CRITICAL: Extract pristine PCM BEFORE stopRecording() clears the internal buffer
+          const pcm = engineGuest.current?.getRawRecordedPCM();
           engineGuest.current?.stopRecording();
           setIsRecordingActive(false);
           setIsRecordingPaused(false);
 
-          // Riverside-style Double-Ender: extract pristine 48kHz PCM and stream to Host DAW
-          const pcm = engineGuest.current?.getRawRecordedPCM();
+          // Riverside-style Double-Ender: stream pristine 48kHz PCM to Host DAW
           if (pcm && pcm.length > 0 && webrtcEngine.current) {
             console.log(`[Guest] Double-Ender: transmitting ${pcm.length} pristine PCM samples to Host DAW...`);
             setSyncStatus('syncing');

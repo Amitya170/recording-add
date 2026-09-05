@@ -735,9 +735,22 @@ export class WebRTCAudioEngine {
       const transfer = this.incomingTransfers.get(transferId);
       if (transfer) {
         const offset = chunkIndex * transfer.chunkSize;
-        const chunk = chunkData instanceof Float32Array
-          ? chunkData
-          : (chunkData instanceof ArrayBuffer ? new Float32Array(chunkData) : new Float32Array(chunkData));
+        // PeerJS BinaryPack often delivers binary fields as Uint8Array, not ArrayBuffer.
+        // We must reinterpret the raw bytes as Float32Array correctly.
+        let chunk: Float32Array;
+        if (chunkData instanceof Float32Array) {
+          chunk = chunkData;
+        } else if (chunkData instanceof ArrayBuffer) {
+          chunk = new Float32Array(chunkData);
+        } else if (ArrayBuffer.isView(chunkData)) {
+          // Uint8Array or other TypedArray from PeerJS BinaryPack — reinterpret bytes
+          const u8 = new Uint8Array(chunkData.buffer, chunkData.byteOffset, chunkData.byteLength);
+          const copy = new Uint8Array(u8.byteLength);
+          copy.set(u8);
+          chunk = new Float32Array(copy.buffer);
+        } else {
+          chunk = new Float32Array(chunkData);
+        }
         transfer.buffer.set(chunk, offset);
         transfer.receivedCount++;
         const pct = Math.min(99, Math.round((transfer.receivedCount / transfer.totalChunks) * 100));
