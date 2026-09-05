@@ -465,12 +465,20 @@ export class SpeakerAudioEngine {
   public toggleMute(): boolean {
     this.isMuted = !this.isMuted;
     this.applyMuteState();
+    // When muted, disable the underlying MediaStream tracks so remote peer receives no audio.
+    if (this.stream) {
+      this.stream.getAudioTracks().forEach((t) => (t.enabled = !this.isMuted));
+    }
     return this.isMuted;
   }
 
   public setMuted(muted: boolean): void {
     this.isMuted = muted;
     this.applyMuteState();
+    // Sync MediaStream track state with mute flag.
+    if (this.stream) {
+      this.stream.getAudioTracks().forEach((t) => (t.enabled = !this.isMuted));
+    }
   }
 
   public applyMuteState(): void {
@@ -487,10 +495,10 @@ export class SpeakerAudioEngine {
         this.gainNode.gain.value = targetGain;
       }
     }
-    // NOTE: We intentionally do NOT set track.enabled on the MediaStream here.
-    // The GainNode handles muting for local recording/metering. Setting
-    // track.enabled = false would kill the audio for ALL consumers of the track,
-    // including WebRTC RTCPeerConnection, causing silence for the remote peer.
+    // NOTE: We now also toggle the MediaStream tracks to stop sending audio when muted.
+    if (this.stream) {
+      this.stream.getAudioTracks().forEach((t) => (t.enabled = !this.isMuted));
+    }
   }
 
   public getMuted(): boolean {

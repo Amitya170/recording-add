@@ -20,7 +20,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   onClose,
 }) => {
   const [format, setFormat] = useState<'wav16' | 'wav24' | 'wav32'>('wav16');
-  const [exportMode, setExportMode] = useState<'stereo' | 'separate'>('stereo');
+  const [exportMode, setExportMode] = useState<'stereo' | 'separate' | 'hostOnly'>('stereo');
   const [title, setTitle] = useState<string>(session?.title || 'Podcast Recording');
   const [artist, setArtist] = useState<string>(session?.hostName || 'Podcast Craft Studio');
 
@@ -72,6 +72,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     if (exportMode === 'stereo') {
       const blob = encodeWav(audioBuffer, depth, getBwfMeta(title));
       downloadBlob(blob, `${sanitized}_stereo_${format}.wav`);
+    } else if (exportMode === 'hostOnly') {
+      // Export host‑only WAV (Speaker A)
+      if (speakerABuffer) {
+        const blob = encodeWav(speakerABuffer, depth, getBwfMeta(`${title} - Host Stem`));
+        downloadBlob(blob, `${sanitized}_host_${format}.wav`);
+      }
     } else {
       // Export separate mono tracks
       if (speakerABuffer) {
@@ -126,7 +132,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     }
   };
 
-  const hasBothSpeakers = !!speakerABuffer && !!speakerBBuffer;
+
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -165,11 +171,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           </div>
         )}
 
-        {/* Export Mode — Stereo vs Separate */}
-        {hasBothSpeakers && (
+        {/* Export Mode — Stereo, Separate, Host‑Only */}
+        {(speakerABuffer || speakerBBuffer) && (
           <div style={{ marginBottom: '16px' }}>
             <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>EXPORT MODE</label>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
               <button
                 className={`btn-transport ${exportMode === 'stereo' ? 'btn-cyan' : ''}`}
                 style={{ width: '100%' }}
@@ -181,8 +187,17 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 className={`btn-transport ${exportMode === 'separate' ? 'btn-cyan' : ''}`}
                 style={{ width: '100%' }}
                 onClick={() => setExportMode('separate')}
+                disabled={!(speakerABuffer && speakerBBuffer)}
+                title={!(speakerABuffer && speakerBBuffer) ? 'Both speakers required for separate tracks' : undefined}
               >
                 <FileAudio size={14} /> Separate Tracks
+              </button>
+              <button
+                className={`btn-transport ${exportMode === 'hostOnly' ? 'btn-cyan' : ''}`}
+                style={{ width: '100%' }}
+                onClick={() => setExportMode('hostOnly')}
+              >
+                <FileAudio size={14} /> Host‑Only WAV
               </button>
             </div>
           </div>
