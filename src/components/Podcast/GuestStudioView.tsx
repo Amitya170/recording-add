@@ -40,6 +40,15 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
   const [isConnected, setIsConnected] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [gain, setGain] = useState(1.0);
+  const isMutedBRef = useRef(isMuted);
+  const gainBRef = useRef(gain);
+  // Keep refs in sync with state (used for monitor gain when remote stream arrives)
+  useEffect(() => {
+    isMutedBRef.current = isMuted;
+    gainBRef.current = gain;
+  }, [isMuted, gain]);
+
+  // Additional UI state
   const [isSolo, setIsSolo] = useState(false);
   const [vocalPreset, setVocalPreset] = useState('warm');
   const [micPermissionError, setMicPermissionError] = useState<string | null>(null);
@@ -141,6 +150,8 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
       if (engineHostIncoming.current) {
         await engineHostIncoming.current.resumeAudio();
         await engineHostIncoming.current.startMediaStream(remoteStream);
+        // Apply monitor gain based on mute state and gain reference (full volume if not muted)
+        engineHostIncoming.current.setMonitorGain(isMutedBRef.current ? 0 : Math.min(1, Math.max(0, gainBRef.current)));
         console.log('[GuestStudio] Host audio routed through Web Audio API to speakers');
       }
     };
