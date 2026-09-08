@@ -66,6 +66,7 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
   });
   const webrtcEngine = useRef<WebRTCAudioEngine | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
 
   // FX & Noise Suppression State
   const [isRecordingActive, setIsRecordingActive] = useState(false);
@@ -91,6 +92,8 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
       try {
         await engineGuest.current.startInputStream(id);
         setIsConnected(true);
+        const devs = await getAudioDevices();
+        setDevices(devs);
 
         // Transmit Guest mic stream to Host via WebRTC
         const stream = engineGuest.current.mediaStream;
@@ -136,33 +139,29 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
         t.enabled = true;
       });
 
-      // 1. Keep <audio> element as stream anchor (prevents Chrome GC of WebRTC stream)
-      //    but MUTE it — Web Audio API handles actual speaker playback via engineHostIncoming (monitorOutput=true).
+      // 1. Direct unmuted live playback through HTML5 <audio> element for full duplex speech
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
-        remoteAudioRef.current.muted = true;
-        remoteAudioRef.current.volume = 0;
-        // Still attempt play() to keep the stream active in Chrome
-        try { await remoteAudioRef.current.play(); } catch {}
+        remoteAudioRef.current.muted = false;
+        remoteAudioRef.current.volume = 1.0;
+        try {
+          await remoteAudioRef.current.play();
+          console.log('[GuestStudio] Host live audio playing through speakers');
+          setAutoplayBlocked(false);
+        } catch (err: any) {
+          console.warn('[GuestStudio] Host audio autoplay blocked by browser policy:', err);
+          setAutoplayBlocked(true);
+        }
       }
 
-      // 2. Attach to engineHostIncoming for speaker playback (via monitorOutput), waveform metering & visualizer
+      // 2. Attach to engineHostIncoming for speaker playback, waveform metering & visualizer
       if (engineHostIncoming.current) {
         console.log('[GuestStudio] Remote stream received, resuming host audio');
         await engineHostIncoming.current.resumeAudio();
-        console.log('[GuestStudio] Starting media stream for host audio');
         await engineHostIncoming.current.startMediaStream(remoteStream);
-        console.log('[GuestStudio] Setting monitor gain to full volume');
         engineHostIncoming.current.setMonitorGain(1);
-        // Force unmute to ensure playback
         if (typeof (engineHostIncoming.current as any).forceUnmute === 'function') {
           (engineHostIncoming.current as any).forceUnmute();
-        }
-        // Ensure the hidden <audio> element is audible as a fallback
-        if (remoteAudioRef.current) {
-          remoteAudioRef.current.muted = false;
-          remoteAudioRef.current.volume = 1;
-          try { await remoteAudioRef.current.play(); } catch (e) { console.warn('[GuestStudio] fallback audio play failed', e); }
         }
       }
     };
@@ -278,16 +277,22 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
   useEffect(() => {
     const unlockAllAudio = async () => {
       // Resume AudioContexts if suspended by browser autoplay policy.
-      // Once resumed, Web Audio monitoring connections play automatically.
       if (engineGuest.current) {
         await engineGuest.current.resumeAudio();
       }
       if (engineHostIncoming.current) {
         await engineHostIncoming.current.resumeAudio();
       }
-      // Keep <audio> element playing (muted) as stream anchor
-      if (remoteAudioRef.current && remoteAudioRef.current.srcObject && remoteAudioRef.current.paused) {
-        try { await remoteAudioRef.current.play(); } catch {}
+      // Ensure <audio> element plays unmuted live host audio to speakers
+      if (remoteAudioRef.current && remoteAudioRef.current.srcObject) {
+        remoteAudioRef.current.muted = false;
+        remoteAudioRef.current.volume = 1.0;
+        if (remoteAudioRef.current.paused) {
+          try {
+            await remoteAudioRef.current.play();
+            setAutoplayBlocked(false);
+          } catch {}
+        }
       }
     };
     window.addEventListener('click', unlockAllAudio);
@@ -605,6 +610,46 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
           overflow: 'hidden',
         }}
       />
+
+      {/* Live Call Audio Unmute Floating Banner if Browser Blocks Autoplay */}
+      {autoplayBlocked && (
+        <div
+          onClick={async () => {
+            if (remoteAudioRef.current) {
+              remoteAudioRef.current.muted = false;
+              remoteAudioRef.current.volume = 1;
+              try {
+                await remoteAudioRef.current.play();
+                setAutoplayBlocked(false);
+              } catch (e) {
+                console.warn('Manual play failed:', e);
+              }
+            }
+          }}
+          style={{
+            position: 'fixed',
+            bottom: '24px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 9999,
+            background: 'linear-gradient(135deg, #ff9500, #ffcc00)',
+            color: '#000',
+            padding: '12px 24px',
+            borderRadius: '30px',
+            boxShadow: '0 8px 32px rgba(255, 149, 0, 0.4)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            cursor: 'pointer',
+            fontWeight: 800,
+            fontSize: '0.85rem',
+            letterSpacing: '0.5px',
+          }}
+        >
+          <Activity size={18} />
+          <span>🔊 HOST IS LIVE — CLICK TO ENABLE AUDIO PLAYBACK</span>
+        </div>
+      )}
 
       {/* Modals */}
       {showHelp && <ShortcutsModal onClose={() => setShowHelp(false)} />}

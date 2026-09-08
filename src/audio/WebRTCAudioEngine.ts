@@ -152,9 +152,42 @@ export class WebRTCAudioEngine {
     meta: any;
   }>();
 
+  private bc: BroadcastChannel | null = null;
+  private hostAlternativeId: string | null = null;
+  private discoveredHostId: string | null = null;
+  private unloadListener: (() => void) | null = null;
+
   constructor(role: 'host' | 'guest', sessionToken: string = 'podcastdefaultsession') {
     this.role = role;
     this.sessionToken = safePeerId(sessionToken);
+
+    // Cross-tab / Local network live channel for instant duplex discovery
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        this.bc = new BroadcastChannel('pcs_room_' + this.sessionToken);
+        this.bc.onmessage = (ev) => {
+          if (this.role === 'guest' && ev.data?.type === 'HOST_ONLINE' && ev.data?.sessionToken === this.sessionToken) {
+            console.log('[WebRTC] Guest discovered Host peer ID via local channel:', ev.data.hostId);
+            this.discoveredHostId = ev.data.hostId;
+            if (!this.isConnected && !this.isConnecting) {
+              this.attemptGuestCall();
+            }
+          }
+        };
+      } catch (e) {
+        console.warn('[WebRTC] BroadcastChannel not supported:', e);
+      }
+    }
+
+    // Free cloud Peer ID immediately when tab closes or reloads to prevent unavailable-id lockout
+    this.unloadListener = () => {
+      this.dispose();
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', this.unloadListener);
+      window.addEventListener('pagehide', this.unloadListener);
+    }
+
     this.initPeer();
   }
 
@@ -165,9 +198,9 @@ export class WebRTCAudioEngine {
   private async initPeer(forceNewCredentials: boolean = false) {
     if (this.isDisposed) return;
 
-    // Explicit deterministic Peer ID for Host and unique alphanumeric Peer ID for Guest
+    // Deterministic Peer ID for Host (or dynamic alternative if primary is locked) and unique ID for Guest
     const peerId = this.role === 'host'
-      ? `pcshost${this.sessionToken}`
+      ? (this.hostAlternativeId || `pcshost${this.sessionToken}`)
       : `pcsguest${this.sessionToken}${Math.random().toString(36).slice(2, 8)}`;
 
     this.updateStatus(this.role === 'host'
@@ -202,6 +235,10 @@ export class WebRTCAudioEngine {
       console.log(`[WebRTC] ${this.role} online on signaling broker — peer ID: ${id}`);
       this.guestRetryBackoffMs = WebRTCAudioEngine.GUEST_RETRY_MIN_MS;
       if (this.role === 'host') {
+        try {
+          localStorage.setItem('pcs_active_host_' + this.sessionToken, id);
+          this.bc?.postMessage({ type: 'HOST_ONLINE', hostId: id, sessionToken: this.sessionToken });
+        } catch {}
         this.updateStatus('Studio Room Ready ✓ — Waiting for Guest to Join…');
         this.listenAsHost();
       } else {
@@ -216,8 +253,10 @@ export class WebRTCAudioEngine {
       switch (err.type) {
         case 'unavailable-id':
           if (this.role === 'host') {
-            this.updateStatus('Session ID already in use — recovering…');
-            this.scheduleReconnect(2500);
+            console.warn('[WebRTC] Primary Host ID is busy on cloud broker. Activating dynamic host ID for instant pairing…');
+            this.hostAlternativeId = `pcshost${this.sessionToken}${Math.random().toString(36).slice(2, 6)}`;
+            this.updateStatus('Assigning live studio room ID…');
+            this.scheduleReconnect(800);
           }
           break;
         case 'peer-unavailable':
@@ -533,7 +572,14 @@ export class WebRTCAudioEngine {
     if (!this.peer || this.peer.destroyed || this.isDisposed || this.isConnecting || this.isConnected) return;
     this.isConnecting = true;
 
-    const hostId = `pcshost${this.sessionToken}`;
+    // Use dynamically discovered host ID (from BroadcastChannel / localStorage) or deterministic default
+    let hostId = this.discoveredHostId;
+    if (!hostId && typeof localStorage !== 'undefined') {
+      hostId = localStorage.getItem('pcs_active_host_' + this.sessionToken);
+    }
+    if (!hostId) {
+      hostId = `pcshost${this.sessionToken}`;
+    }
     console.log('[WebRTC] Guest: connecting to host ID:', hostId);
 
     // Watchdog: If connection doesn't open within 8s, reset state and retry with backoff
@@ -887,6 +933,18 @@ export class WebRTCAudioEngine {
     if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
     if (this.connectionWatchdog) clearTimeout(this.connectionWatchdog);
+    if (this.unloadListener && typeof window !== 'undefined') {
+      window.removeEventListener('beforeunload', this.unloadListener);
+      window.removeEventListener('pagehide', this.unloadListener);
+      this.unloadListener = null;
+    }
+    if (this.role === 'host' && typeof localStorage !== 'undefined') {
+      try {
+        localStorage.removeItem('pcs_active_host_' + this.sessionToken);
+      } catch {}
+    }
+    try { this.bc?.close(); } catch {}
+    this.bc = null;
     try { this.mediaConn?.close(); } catch {}
     try { this.dataConn?.close(); } catch {}
     try { this.peer?.destroy(); } catch {}
