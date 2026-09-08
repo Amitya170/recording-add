@@ -303,6 +303,22 @@ export class SpeakerAudioEngine {
     }
   }
 
+  /**
+   * Force unmute monitoring output and set gain to full volume.
+   * Useful for ensuring playback when remote audio is attached.
+   */
+  public forceUnmute(): void {
+    // Ensure monitor output is enabled
+    if (!this.monitorOutput) {
+      this.monitorOutput = true;
+    }
+    // Unmute and set gain to full
+    this.setMonitorMuted(false);
+    this.setMonitorGain(1);
+    // Re-establish monitoring connection if needed
+    this.ensureMonitoringConnection();
+  }
+
   private ensureMonitoringConnection(): void {
     if (!this.ctx || !this.gainNode || !this.monitorGainNode) return;
     // Disconnect any existing monitoring path

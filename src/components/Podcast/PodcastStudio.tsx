@@ -293,13 +293,25 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
       // 2. Attach to engineB for speaker playback (via monitorOutput), waveform visualization & PCM recording
       if (engineB.current) {
+        console.log('[Host] Guest stream received, resuming guest audio engine');
         await engineB.current.resumeAudio();
         await engineB.current.startMediaStream(remoteStream);
         // Apply current monitor volume setting
-        engineB.current.setMonitorGain(isMutedBRef.current ? 0 : Math.min(1, Math.max(0, gainBRef.current)));
+        const gainVal = isMutedBRef.current ? 0 : Math.min(1, Math.max(0, gainBRef.current));
+        engineB.current.setMonitorGain(gainVal);
+        // Force unmute to ensure monitor output is active
+        if (typeof (engineB.current as any).forceUnmute === 'function') {
+          (engineB.current as any).forceUnmute();
+        }
         setIsConnectedB(true);
         if (isRecordingRef.current) {
           engineB.current.startRecording();
+        }
+        // Ensure hidden audio element is playing (unmuted) as fallback for Chrome autoplay policy
+        if (remoteAudioRef.current) {
+          remoteAudioRef.current.muted = false;
+          remoteAudioRef.current.volume = 1;
+          try { await remoteAudioRef.current.play(); } catch (e) { console.warn('[Host] fallback audio play failed', e); }
         }
         console.log('[Host] Guest audio routed through Web Audio API to speakers');
       }

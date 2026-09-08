@@ -148,11 +148,22 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
 
       // 2. Attach to engineHostIncoming for speaker playback (via monitorOutput), waveform metering & visualizer
       if (engineHostIncoming.current) {
+        console.log('[GuestStudio] Remote stream received, resuming host audio');
         await engineHostIncoming.current.resumeAudio();
+        console.log('[GuestStudio] Starting media stream for host audio');
         await engineHostIncoming.current.startMediaStream(remoteStream);
-        // Apply monitor gain based on mute state and gain reference (full volume if not muted)
-        engineHostIncoming.current.setMonitorGain(isMutedBRef.current ? 0 : Math.min(1, Math.max(0, gainBRef.current)));
-        console.log('[GuestStudio] Host audio routed through Web Audio API to speakers');
+        console.log('[GuestStudio] Setting monitor gain to full volume');
+        engineHostIncoming.current.setMonitorGain(1);
+        // Force unmute to ensure playback
+        if (typeof (engineHostIncoming.current as any).forceUnmute === 'function') {
+          (engineHostIncoming.current as any).forceUnmute();
+        }
+        // Ensure the hidden <audio> element is audible as a fallback
+        if (remoteAudioRef.current) {
+          remoteAudioRef.current.muted = false;
+          remoteAudioRef.current.volume = 1;
+          try { await remoteAudioRef.current.play(); } catch (e) { console.warn('[GuestStudio] fallback audio play failed', e); }
+        }
       }
     };
     rEngine.onSignal = async (sig: any) => {
