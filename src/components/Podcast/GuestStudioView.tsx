@@ -37,6 +37,10 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
   const engineHostIncoming = useRef<SpeakerAudioEngine | null>(null);
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [selectedDevice, setSelectedDevice] = useState('');
+  const selectedDeviceRef = useRef(selectedDevice);
+  useEffect(() => {
+    selectedDeviceRef.current = selectedDevice;
+  }, [selectedDevice]);
   const [isConnected, setIsConnected] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [gain, setGain] = useState(1.0);
@@ -86,6 +90,7 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
   guestDisplayNameRef.current = guestDisplayName;
 
   const handleDeviceChange = useCallback(async (id: string) => {
+    selectedDeviceRef.current = id;
     setSelectedDevice(id);
     setMicPermissionError(null);
     if (id && engineGuest.current) {
@@ -141,11 +146,15 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
 
       // 1. Direct unmuted live playback through HTML5 <audio> element for full duplex speech
       if (remoteAudioRef.current) {
-        remoteAudioRef.current.srcObject = remoteStream;
+        if (remoteAudioRef.current.srcObject !== remoteStream) {
+          remoteAudioRef.current.srcObject = remoteStream;
+        }
         remoteAudioRef.current.muted = false;
         remoteAudioRef.current.volume = 1.0;
         try {
-          await remoteAudioRef.current.play();
+          if (remoteAudioRef.current.paused) {
+            await remoteAudioRef.current.play();
+          }
           console.log('[GuestStudio] Host live audio playing through speakers');
           setAutoplayBlocked(false);
         } catch (err: any) {
@@ -154,15 +163,11 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
         }
       }
 
-      // 2. Attach to engineHostIncoming for speaker playback, waveform metering & visualizer
+      // 2. Attach to engineHostIncoming for waveform metering & visualizer
       if (engineHostIncoming.current) {
         console.log('[GuestStudio] Remote stream received, resuming host audio');
         await engineHostIncoming.current.resumeAudio();
         await engineHostIncoming.current.startMediaStream(remoteStream);
-        engineHostIncoming.current.setMonitorGain(1);
-        if (typeof (engineHostIncoming.current as any).forceUnmute === 'function') {
-          (engineHostIncoming.current as any).forceUnmute();
-        }
       }
     };
     rEngine.onSignal = async (sig: any) => {
@@ -210,10 +215,9 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     webrtcEngine.current = rEngine;
 
     // Guest own mic: no monitor (prevents hearing own voice / feedback).
-    // Host incoming: monitorOutput=true routes host audio to speakers via Web Audio API.
-    // This is more reliable than <audio>.play() which Chrome blocks without a user gesture.
+    // Host incoming: monitorOutput=false because native HTML5 <audio> tag handles 100% of speaker playback without flanging/echo.
     const engine = new SpeakerAudioEngine('Guest Speaker', false);
-    const eHost = new SpeakerAudioEngine('Host Speaker (Incoming)', true);
+    const eHost = new SpeakerAudioEngine('Host Speaker (Incoming)', false);
     engineGuest.current = engine;
     engineHostIncoming.current = eHost;
 
@@ -221,14 +225,10 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
       try {
         const devs = await getAudioDevices();
         setDevices(devs);
-        if (devs.length > 0) {
-          setSelectedDevice((curr) => {
-            if (!curr) {
-              handleDeviceChange(devs[0].deviceId);
-              return devs[0].deviceId;
-            }
-            return curr;
-          });
+        if (devs.length > 0 && !selectedDeviceRef.current) {
+          const firstId = devs[0].deviceId;
+          selectedDeviceRef.current = firstId;
+          await handleDeviceChange(firstId);
         }
       } catch (err) {
         console.warn('Failed getting guest audio devices:', err);
@@ -596,18 +596,19 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
         </div>
       </main>
 
-      {/* Live WebRTC Remote Host Audio Element (Mobile WebKit & Safari safe) */}
+      {/* Live WebRTC Remote Host Audio Element */}
       <audio
         ref={remoteAudioRef}
         autoPlay
         playsInline
         style={{
-          position: 'absolute',
-          width: '1px',
-          height: '1px',
-          opacity: 0.01,
+          position: 'fixed',
+          bottom: '-100px',
+          right: '-100px',
+          width: '120px',
+          height: '32px',
+          opacity: 0.99,
           pointerEvents: 'none',
-          overflow: 'hidden',
         }}
       />
 

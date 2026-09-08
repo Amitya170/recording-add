@@ -324,19 +324,40 @@ export const SuperAdminPanel: React.FC = () => {
         setAuditionDuration(audio.duration || session.durationSeconds);
       };
 
-      audio.onended = () => {
-        setAuditionIsPlaying(false);
-        setAuditionCurrentTime(0);
+      const tryFallbackPlay = async () => {
+        try {
+          const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+          const ctx = new AudioCtx();
+          if (ctx.state === 'suspended') await ctx.resume();
+          const ab = await blobToPlay!.arrayBuffer();
+          const decoded = await ctx.decodeAudioData(ab);
+          const pcm16Blob = encodeWav(decoded, 16);
+          const fallbackUrl = URL.createObjectURL(pcm16Blob);
+          const fallbackAudio = new Audio(fallbackUrl);
+          fallbackAudio.playbackRate = 1.0;
+          previewAudioRef.current = fallbackAudio;
+          fallbackAudio.onended = () => {
+            setAuditionIsPlaying(false);
+            setAuditionCurrentTime(0);
+          };
+          fallbackAudio.ontimeupdate = () => {
+            setAuditionCurrentTime(fallbackAudio.currentTime);
+          };
+          await fallbackAudio.play();
+          setAuditionIsPlaying(true);
+        } catch (e) {
+          console.warn('Fallback playback error:', e);
+          setPreviewingSession(null);
+          setAuditionIsPlaying(false);
+        }
       };
 
       audio.onerror = () => {
-        setPreviewingSession(null);
-        setAuditionIsPlaying(false);
+        tryFallbackPlay();
       };
 
       audio.play().catch(() => {
-        setPreviewingSession(null);
-        setAuditionIsPlaying(false);
+        tryFallbackPlay();
       });
     }
   };

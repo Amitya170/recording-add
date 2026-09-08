@@ -67,6 +67,10 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [deviceA, setDeviceA] = useState('');
+  const deviceARef = useRef(deviceA);
+  useEffect(() => {
+    deviceARef.current = deviceA;
+  }, [deviceA]);
   const [_deviceB, _setDeviceB] = useState('');
   const [isConnectedA, setIsConnectedA] = useState(false);
   const [isConnectedB, setIsConnectedB] = useState(false);
@@ -241,6 +245,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
   // Device Handlers
   const handleDeviceChangeA = useCallback(async (id: string) => {
+    deviceARef.current = id;
     setDeviceA(id);
     if (id && engineA.current) {
       try {
@@ -289,11 +294,15 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
       // 1. Direct, unmuted, live call audio playback via HTML5 <audio> element
       if (remoteAudioRef.current) {
-        remoteAudioRef.current.srcObject = remoteStream;
+        if (remoteAudioRef.current.srcObject !== remoteStream) {
+          remoteAudioRef.current.srcObject = remoteStream;
+        }
         remoteAudioRef.current.muted = isMutedBRef.current;
         remoteAudioRef.current.volume = isMutedBRef.current ? 0 : Math.min(1, Math.max(0, gainBRef.current));
         try {
-          await remoteAudioRef.current.play();
+          if (remoteAudioRef.current.paused) {
+            await remoteAudioRef.current.play();
+          }
           console.log('[Host] Guest live audio playing through speakers');
           setAutoplayBlocked(false);
         } catch (e) {
@@ -307,16 +316,10 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         console.log('[Host] Attaching guest audio to engineB for visualization and recording');
         await engineB.current.resumeAudio();
         await engineB.current.startMediaStream(remoteStream);
-        const gainVal = isMutedBRef.current ? 0 : Math.min(1, Math.max(0, gainBRef.current));
-        engineB.current.setMonitorGain(gainVal);
-        if (typeof (engineB.current as any).forceUnmute === 'function') {
-          (engineB.current as any).forceUnmute();
-        }
         setIsConnectedB(true);
         if (isRecordingRef.current) {
           engineB.current.startRecording();
         }
-        console.log('[Host] Guest audio routed through Web Audio API to speakers');
       }
     };
 
@@ -359,10 +362,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     webrtcEngine.current = rEngine;
 
     // Host mic: no self monitor (prevents hearing own voice / feedback).
-    // Guest incoming: monitorOutput=true routes guest audio to speakers via Web Audio API.
-    // This is more reliable than <audio>.play() which Chrome blocks without a user gesture.
+    // Guest incoming: monitorOutput=false because native HTML5 <audio> tag handles 100% of speaker playback without flanging/echo.
     const eA = new SpeakerAudioEngine('Speaker A (Host)', false);
-    const eB = new SpeakerAudioEngine('Speaker B (Guest)', true);
+    const eB = new SpeakerAudioEngine('Speaker B (Guest)', false);
     engineA.current = eA;
     engineB.current = eB;
 
@@ -370,14 +372,10 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       try {
         const devs = await getAudioDevices();
         setDevices(devs);
-        if (devs.length > 0) {
-          setDeviceA((curr) => {
-            if (!curr) {
-              handleDeviceChangeA(devs[0].deviceId);
-              return devs[0].deviceId;
-            }
-            return curr;
-          });
+        if (devs.length > 0 && !deviceARef.current) {
+          const firstId = devs[0].deviceId;
+          deviceARef.current = firstId;
+          await handleDeviceChangeA(firstId);
         }
       } catch (err) {
         console.warn('Failed getting audio devices:', err);
@@ -540,7 +538,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     const dur = Math.round(buf.duration) || Math.round(elapsedRef.current / 1000) || 1;
     const title = `Podcast Session ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
     const sanitized = title.replace(/\s+/g, '_');
-    const stereoBlob = encodeWav(buf, 32);
+    const stereoBlob = encodeWav(buf, 16);
 
     setDriveUpload({
       isUploading: true,
@@ -660,9 +658,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         cueMarkers: markers.map((m) => ({ time: m.time, label: m.label })),
       };
 
-      const stereoBlob = encodeWav(compiled, 32, bwfMeta);
-      const blobA = bA ? encodeWav(bA, 32, { ...bwfMeta, title: `${savedSession.title} - Host Stem` }) : undefined;
-      const blobB = bB ? encodeWav(bB, 32, { ...bwfMeta, title: `${savedSession.title} - Guest Stem` }) : undefined;
+      const stereoBlob = encodeWav(compiled, 16, bwfMeta);
+      const blobA = bA ? encodeWav(bA, 16, { ...bwfMeta, title: `${savedSession.title} - Host Stem` }) : undefined;
+      const blobB = bB ? encodeWav(bB, 16, { ...bwfMeta, title: `${savedSession.title} - Guest Stem` }) : undefined;
       saveSessionAudioBlobs(savedSession.id, stereoBlob, blobA, blobB);
 
       // Auto-upload recorded audio directly to Google Drive folder if enabled
@@ -778,22 +776,13 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     sttEngine.current?.stop();
     clearRecoverySession();
 
-    // Signal Guest to stop and transmit its pristine double-ender PCM
-    webrtcEngine.current?.sendSignal({ type: 'RECORDING_STATE', isRecording: false });
-
-    // If Guest is connected, trigger sync status and wait for PCM transfer
-    if (webrtcEngine.current?.isConnected) {
-      setGuestSyncStatus('syncing');
-      setGuestSyncProgress(0);
-      console.log('[Host] Waiting for Guest pristine Double-Ender audio transfer...');
-      // Do not compile now; will compile when Guest PCM arrives via onAudioBufferReceived.
-      return;
-    }
-
-    // No Guest connection; compile immediately using available buffers
+    // Always compile immediately with recorded stems so the recording is INSTANTLY available for playback and export!
     let compiled: AudioBuffer | null = null;
-    if (bA && bB && engineA.current?.audioContext) {
-      compiled = mergeToStereo(engineA.current.audioContext, bA, bB);
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    const ctx = engineA.current?.audioContext || new AudioCtx({ sampleRate: 48000 });
+
+    if (bA && bB) {
+      compiled = mergeToStereo(ctx, bA, bB);
     } else if (bA) {
       compiled = bA;
     } else if (bB) {
@@ -802,10 +791,8 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
     if (!compiled) {
       try {
-        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-        const fallbackCtx = engineA.current?.audioContext || new AudioCtx();
         const dur = Math.max(1, finalDurationSeconds);
-        compiled = fallbackCtx.createBuffer(2, Math.max(44100, dur * 44100), 44100);
+        compiled = ctx.createBuffer(2, Math.max(44100, dur * 44100), 44100);
       } catch (e) {
         console.warn('Fallback buffer creation error:', e);
       }
@@ -813,6 +800,17 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
     if (compiled) {
       finalizeAndSaveSession(compiled, bA, bB);
+      console.log('[Host] Recording compiled immediately and ready for playback!');
+    }
+
+    // Signal Guest to stop and transmit its pristine double-ender PCM
+    webrtcEngine.current?.sendSignal({ type: 'RECORDING_STATE', isRecording: false });
+
+    // If Guest is connected, trigger sync status in background while transfer occurs
+    if (webrtcEngine.current?.isConnected) {
+      setGuestSyncStatus('syncing');
+      setGuestSyncProgress(0);
+      console.log('[Host] Background sync active for Guest pristine Double-Ender audio transfer...');
     }
   }, [finalizeAndSaveSession]);
 
@@ -1392,18 +1390,19 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         />
       )}
 
-      {/* Live WebRTC Remote Guest Audio Element for Bi-Directional Call Playback (Mobile WebKit safe) */}
+      {/* Live WebRTC Remote Guest Audio Element for Bi-Directional Call Playback */}
       <audio
         ref={remoteAudioRef}
         autoPlay
         playsInline
         style={{
-          position: 'absolute',
-          width: '1px',
-          height: '1px',
-          opacity: 0.01,
+          position: 'fixed',
+          bottom: '-100px',
+          right: '-100px',
+          width: '120px',
+          height: '32px',
+          opacity: 0.99,
           pointerEvents: 'none',
-          overflow: 'hidden',
         }}
       />
 

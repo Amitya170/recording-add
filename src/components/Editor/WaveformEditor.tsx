@@ -74,6 +74,7 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const playStartTimeRef = useRef<number>(0);
   const animFrameRef = useRef<number | null>(null);
+  const dragStartRef = useRef<number | null>(null);
 
   const editCtxRef = useRef<AudioContext | null>(null);
   const getEditCtx = (): AudioContext => {
@@ -332,34 +333,73 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
   }, [audioBuffer, speakerABuffer, speakerBBuffer, selection, currentTime, duration, effectiveWidth, zoom]);
 
   // Handle Playback
-  const togglePlay = () => {
+  const togglePlay = async () => {
     if (!audioBuffer) return;
 
     if (isPlaying) {
       if (audioSourceRef.current) {
         try { audioSourceRef.current.stop(); } catch { /* ignore */ }
+        audioSourceRef.current = null;
       }
       setIsPlaying(false);
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     } else {
       const ctx = getEditCtx();
+      if (ctx.state === 'suspended') {
+        try {
+          await ctx.resume();
+        } catch (err) {
+          console.warn('[WaveformEditor] AudioContext resume error:', err);
+        }
+      }
+
+      // Stop any existing playing node
+      if (audioSourceRef.current) {
+        try { audioSourceRef.current.stop(); } catch {}
+        audioSourceRef.current = null;
+      }
+
+      const hasValidSelection = Boolean(selection && (selection.end - selection.start) > 0.05);
+      let startOffset = hasValidSelection ? selection!.start : currentTime;
+      const playEnd = hasValidSelection ? selection!.end : duration;
+
+      if (startOffset >= duration - 0.05) {
+        startOffset = 0;
+        setCurrentTime(0);
+      }
+      playStartTimeRef.current = ctx.currentTime - startOffset;
 
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(ctx.destination);
 
-      const startOffset = selection ? selection.start : currentTime;
-      playStartTimeRef.current = ctx.currentTime - startOffset;
+      source.onended = () => {
+        setIsPlaying(false);
+        if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      };
 
-      source.start(0, startOffset);
-      audioSourceRef.current = source;
-      setIsPlaying(true);
+      try {
+        if (hasValidSelection) {
+          source.start(0, startOffset, playEnd - startOffset);
+        } else {
+          source.start(0, startOffset);
+        }
+        audioSourceRef.current = source;
+        setIsPlaying(true);
+      } catch (err) {
+        console.error('[WaveformEditor] Playback start error:', err);
+        return;
+      }
 
       const updatePlayhead = () => {
         const elapsed = ctx.currentTime - playStartTimeRef.current;
-        if (elapsed >= duration) {
+        if (elapsed >= playEnd) {
           setIsPlaying(false);
-          setCurrentTime(0);
+          setCurrentTime(hasValidSelection ? selection!.start : 0);
+          if (audioSourceRef.current) {
+            try { audioSourceRef.current.stop(); } catch {}
+            audioSourceRef.current = null;
+          }
         } else {
           setCurrentTime(elapsed);
           animFrameRef.current = requestAnimationFrame(updatePlayhead);
@@ -377,27 +417,29 @@ export const WaveformEditor: React.FC<WaveformEditorProps> = ({
     const clickedTime = Math.max(0, Math.min(duration, (clickX / rect.width) * duration));
 
     setCurrentTime(clickedTime);
-    setSelection({ start: clickedTime, end: clickedTime });
+    dragStartRef.current = clickedTime;
     setIsSelecting(true);
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isSelecting || !canvasRef.current || !duration || !selection) return;
+    if (!isSelecting || !canvasRef.current || !duration || dragStartRef.current === null) return;
     const rect = canvasRef.current.getBoundingClientRect();
     const moveX = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
     const moveTime = (moveX / rect.width) * duration;
 
-    setSelection({
-      start: Math.min(selection.start, moveTime),
-      end: Math.max(selection.start, moveTime),
-    });
+    const start = Math.min(dragStartRef.current, moveTime);
+    const end = Math.max(dragStartRef.current, moveTime);
+
+    if (end - start > 0.05) {
+      setSelection({ start, end });
+    } else {
+      setSelection(null);
+    }
   };
 
   const handleMouseUp = () => {
     setIsSelecting(false);
-    if (selection && Math.abs(selection.end - selection.start) < 0.05) {
-      setSelection(null);
-    }
+    dragStartRef.current = null;
   };
 
   // History Helper: Push current state to undoStack
