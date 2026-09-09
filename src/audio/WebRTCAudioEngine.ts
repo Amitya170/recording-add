@@ -652,8 +652,9 @@ export class WebRTCAudioEngine {
 
   private async startMediaCall(hostId: string) {
     if (!this.peer || this.peer.destroyed || this.isDisposed) return;
-    if (this.mediaConn && this.mediaConn.open) {
-      console.log('[WebRTC] Media call already active, skipping startMediaCall');
+    const existingPc = (this.mediaConn as any)?.peerConnection as RTCPeerConnection | undefined;
+    if (this.mediaConn && existingPc && existingPc.connectionState !== 'closed' && existingPc.connectionState !== 'failed') {
+      console.log(`[WebRTC] Media call already active (pc state: ${existingPc.connectionState}), skipping startMediaCall`);
       return;
     }
     try { this.mediaConn?.close(); } catch {}
@@ -730,9 +731,11 @@ export class WebRTCAudioEngine {
     if (this.lastLocalTrackId === audioTrack.id) return;
     this.lastLocalTrackId = audioTrack.id;
 
-    // If Guest, data channel is open, and no media call exists yet: initiate media call with live mic stream
+    // If Guest, data channel is open, and no active media call exists yet: initiate media call with live mic stream
     if (this.role === 'guest' && this.peer && !this.peer.destroyed && !this.isDisposed) {
-      if (this.dataConn && this.dataConn.open && !this.mediaConn) {
+      const activePc = (this.mediaConn as any)?.peerConnection as RTCPeerConnection | undefined;
+      const isCallLive = this.mediaConn && activePc && activePc.connectionState !== 'closed' && activePc.connectionState !== 'failed';
+      if (this.dataConn && this.dataConn.open && !isCallLive) {
         let hostId = this.discoveredHostId;
         if (!hostId && typeof localStorage !== 'undefined') {
           hostId = localStorage.getItem('pcs_active_host_' + this.sessionToken);

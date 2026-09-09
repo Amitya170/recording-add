@@ -144,30 +144,29 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
         t.enabled = true;
       });
 
-      // 1. Direct unmuted live playback through HTML5 <audio> element for full duplex speech
+      // 1. Muted HTML5 <audio> element sink to satisfy Chromium WebRTC network pipeline
       if (remoteAudioRef.current) {
         if (remoteAudioRef.current.srcObject !== remoteStream) {
           remoteAudioRef.current.srcObject = remoteStream;
         }
-        remoteAudioRef.current.muted = false;
-        remoteAudioRef.current.volume = 1.0;
+        // Always muted so browser autoplay policy NEVER blocks it, waking up WebRTC network packets
+        remoteAudioRef.current.muted = true;
         try {
           if (remoteAudioRef.current.paused) {
             await remoteAudioRef.current.play();
           }
-          console.log('[GuestStudio] Host live audio playing through speakers');
-          setAutoplayBlocked(false);
         } catch (err: any) {
-          console.warn('[GuestStudio] Host audio autoplay blocked by browser policy:', err);
-          setAutoplayBlocked(true);
+          console.warn('[GuestStudio] remoteAudioRef play error:', err);
         }
       }
 
-      // 2. Attach to engineHostIncoming for waveform metering & visualizer
+      // 2. Attach to engineHostIncoming for reliable Web Audio live speaker playback, VU metering & visualizer
       if (engineHostIncoming.current) {
-        console.log('[GuestStudio] Remote stream received, resuming host audio');
+        console.log('[GuestStudio] Remote stream received, resuming host audio and connecting to speakers');
         await engineHostIncoming.current.resumeAudio();
         await engineHostIncoming.current.startMediaStream(remoteStream);
+        engineHostIncoming.current.forceUnmute();
+        setAutoplayBlocked(false);
       }
     };
     rEngine.onSignal = async (sig: any) => {
@@ -215,9 +214,9 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
     webrtcEngine.current = rEngine;
 
     // Guest own mic: no monitor (prevents hearing own voice / feedback).
-    // Host incoming: monitorOutput=false because native HTML5 <audio> tag handles 100% of speaker playback without flanging/echo.
+    // Host incoming: monitorOutput=true routes host audio through Web Audio directly to speakers.
     const engine = new SpeakerAudioEngine('Guest Speaker', false);
-    const eHost = new SpeakerAudioEngine('Host Speaker (Incoming)', false);
+    const eHost = new SpeakerAudioEngine('Host Speaker (Incoming)', true);
     engineGuest.current = engine;
     engineHostIncoming.current = eHost;
 
@@ -283,14 +282,12 @@ export const GuestStudioView: React.FC<GuestStudioViewProps> = ({ guestNameParam
       if (engineHostIncoming.current) {
         await engineHostIncoming.current.resumeAudio();
       }
-      // Ensure <audio> element plays unmuted live host audio to speakers
+      // Keep <audio> element running as muted RTP network sink for Chromium WebRTC
       if (remoteAudioRef.current && remoteAudioRef.current.srcObject) {
-        remoteAudioRef.current.muted = false;
-        remoteAudioRef.current.volume = 1.0;
+        remoteAudioRef.current.muted = true;
         if (remoteAudioRef.current.paused) {
           try {
             await remoteAudioRef.current.play();
-            setAutoplayBlocked(false);
           } catch {}
         }
       }

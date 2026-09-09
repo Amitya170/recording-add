@@ -55,7 +55,7 @@ export function encodeWav(
   // 3. Build RIFF 'cue ' and 'adtl' chunks (Timeline Chapter Markers)
   const cueChunks = buildCueAndAdtlChunks(metadata?.cueMarkers || [], sampleRate);
 
-  // Total File Size = 12 (RIFF Header) + fmtChunk(24) + bextChunk + dataChunk(8 + dataSize) + infoChunk + cueChunks
+  // Total File Size = 12 (RIFF Header) + fmtChunk(24) + dataChunk(8 + dataSize) + bextChunk + infoChunk + cueChunks
   const headerSize = 12;
   const fmtChunkSize = 24; // 'fmt ' (4) + size (4) + fmt data (16)
   const dataHeaderSize = 8; // 'data' (4) + size (4)
@@ -63,9 +63,9 @@ export function encodeWav(
   const totalFileSize =
     headerSize +
     fmtChunkSize +
-    bextChunk.byteLength +
     dataHeaderSize +
     dataSize +
+    bextChunk.byteLength +
     infoChunk.byteLength +
     cueChunks.byteLength;
 
@@ -91,13 +91,7 @@ export function encodeWav(
   view.setUint16(offset + 22, bitDepth, true);
   offset += 24;
 
-  /* bext sub-chunk (Broadcast Audio Extension) */
-  if (bextChunk.byteLength > 0) {
-    new Uint8Array(arrayBuffer, offset, bextChunk.byteLength).set(new Uint8Array(bextChunk));
-    offset += bextChunk.byteLength;
-  }
-
-  /* data sub-chunk */
+  /* data sub-chunk — placed immediately after fmt chunk at offset 36 for standard canonical WAV compatibility */
   writeString(view, offset, 'data');
   view.setUint32(offset + 4, dataSize, true);
   offset += 8;
@@ -131,6 +125,12 @@ export function encodeWav(
         offset += 4;
       }
     }
+  }
+
+  /* bext sub-chunk (Broadcast Audio Extension) — placed after data chunk */
+  if (bextChunk.byteLength > 0) {
+    new Uint8Array(arrayBuffer, offset, bextChunk.byteLength).set(new Uint8Array(bextChunk));
+    offset += bextChunk.byteLength;
   }
 
   /* LIST (INFO) sub-chunk */

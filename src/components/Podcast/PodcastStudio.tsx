@@ -144,7 +144,7 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
 
   // Unique Studio WebRTC Session Room Token (persistent per host session unless rotated)
   const [studioSessionToken, setStudioSessionToken] = useState<string>(() => {
-    if (sessionToken && sessionToken !== 'podcast_main_session') {
+    if (sessionToken) {
       return sessionToken;
     }
     const hostKey = currentUser?.id || currentUser?.name || 'host';
@@ -172,14 +172,12 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
       if (engineB.current) {
         await engineB.current.resumeAudio();
       }
-      // Ensure <audio> element plays unmuted live audio to speakers
+      // Keep <audio> element running as muted RTP network sink for Chromium WebRTC
       if (remoteAudioRef.current && remoteAudioRef.current.srcObject) {
-        remoteAudioRef.current.muted = isMutedBRef.current;
-        remoteAudioRef.current.volume = isMutedBRef.current ? 0 : Math.min(1, Math.max(0, gainBRef.current));
+        remoteAudioRef.current.muted = true;
         if (remoteAudioRef.current.paused) {
           try {
             await remoteAudioRef.current.play();
-            setAutoplayBlocked(false);
           } catch {}
         }
       }
@@ -292,31 +290,31 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
         t.enabled = true;
       });
 
-      // 1. Direct, unmuted, live call audio playback via HTML5 <audio> element
+      // 1. Muted HTML5 <audio> element sink to wake up Chromium WebRTC RTP network pipeline
       if (remoteAudioRef.current) {
         if (remoteAudioRef.current.srcObject !== remoteStream) {
           remoteAudioRef.current.srcObject = remoteStream;
         }
-        remoteAudioRef.current.muted = isMutedBRef.current;
-        remoteAudioRef.current.volume = isMutedBRef.current ? 0 : Math.min(1, Math.max(0, gainBRef.current));
+        remoteAudioRef.current.muted = true;
         try {
           if (remoteAudioRef.current.paused) {
             await remoteAudioRef.current.play();
           }
-          console.log('[Host] Guest live audio playing through speakers');
-          setAutoplayBlocked(false);
         } catch (e) {
-          console.warn('[Host] Guest audio autoplay blocked by browser policy:', e);
-          setAutoplayBlocked(true);
+          console.warn('[Host] remoteAudioRef play error:', e);
         }
       }
 
-      // 2. Attach to engineB for waveform visualization, VU metering & PCM recording
+      // 2. Attach to engineB for reliable Web Audio live speaker playback, VU metering & PCM recording
       if (engineB.current) {
-        console.log('[Host] Attaching guest audio to engineB for visualization and recording');
+        console.log('[Host] Attaching guest audio to engineB for live playback & recording');
         await engineB.current.resumeAudio();
         await engineB.current.startMediaStream(remoteStream);
+        engineB.current.forceUnmute();
+        engineB.current.setMonitorMuted(isMutedBRef.current);
+        engineB.current.setMonitorGain(isMutedBRef.current ? 0 : Math.min(1, Math.max(0, gainBRef.current)));
         setIsConnectedB(true);
+        setAutoplayBlocked(false);
         if (isRecordingRef.current) {
           engineB.current.startRecording();
         }
@@ -362,9 +360,9 @@ export const PodcastStudio: React.FC<PodcastStudioProps> = ({ guestNameParam, ho
     webrtcEngine.current = rEngine;
 
     // Host mic: no self monitor (prevents hearing own voice / feedback).
-    // Guest incoming: monitorOutput=false because native HTML5 <audio> tag handles 100% of speaker playback without flanging/echo.
+    // Guest incoming: monitorOutput=true routes guest audio through Web Audio to speakers with volume control.
     const eA = new SpeakerAudioEngine('Speaker A (Host)', false);
-    const eB = new SpeakerAudioEngine('Speaker B (Guest)', false);
+    const eB = new SpeakerAudioEngine('Speaker B (Guest)', true);
     engineA.current = eA;
     engineB.current = eB;
 

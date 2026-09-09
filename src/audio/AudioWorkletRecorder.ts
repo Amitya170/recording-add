@@ -9,11 +9,35 @@ class PcmRecorderProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.isRecording = true;
+    this.bufferSize = 2048; // Batch ~42.6ms of audio at 48kHz (reduces postMessage from 375/s to ~23/s)
+    this._buffer = new Float32Array(this.bufferSize);
+    this._bufferIndex = 0;
+    this._peak = 0;
+    this._sumSq = 0;
+
     this.port.onmessage = (event) => {
       if (event.data && typeof event.data.isRecording === 'boolean') {
         this.isRecording = event.data.isRecording;
+        if (!this.isRecording && this._bufferIndex > 0) {
+          this.flush();
+        }
       }
     };
+  }
+
+  flush() {
+    if (this._bufferIndex === 0) return;
+    const chunk = this._buffer.slice(0, this._bufferIndex);
+    const rms = Math.sqrt(this._sumSq / this._bufferIndex);
+    this.port.postMessage({
+      type: 'pcm-data',
+      buffer: chunk.buffer,
+      peak: this._peak,
+      rms: rms,
+    }, [chunk.buffer]);
+    this._bufferIndex = 0;
+    this._peak = 0;
+    this._sumSq = 0;
   }
 
   process(inputs, outputs, parameters) {
@@ -29,29 +53,18 @@ class PcmRecorderProcessor extends AudioWorkletProcessor {
       output[0].set(channelData);
     }
 
-    // Fast metering calculation
-    let peak = 0;
-    let sumSq = 0;
     const len = channelData.length;
-    const copy = new Float32Array(len);
-
     for (let i = 0; i < len; i++) {
       const val = channelData[i];
-      copy[i] = val;
       const abs = Math.abs(val);
-      if (abs > peak) peak = abs;
-      sumSq += val * val;
+      if (abs > this._peak) this._peak = abs;
+      this._sumSq += val * val;
+
+      this._buffer[this._bufferIndex++] = val;
+      if (this._bufferIndex >= this.bufferSize) {
+        this.flush();
+      }
     }
-
-    const rms = Math.sqrt(sumSq / len);
-
-    // Stream audio buffer and telemetry to main thread
-    this.port.postMessage({
-      type: 'pcm-data',
-      buffer: copy.buffer,
-      peak,
-      rms,
-    }, [copy.buffer]);
 
     return true;
   }

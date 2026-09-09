@@ -26,6 +26,7 @@ export class SpeakerAudioEngine {
   private sourceNode: AudioNode | null = null;
   private analyserEngine: AnalyserEngine | null = null;
   private gainNode: GainNode | null = null;
+  private recordGainNode: GainNode | null = null; // Clean pre-gate recording tap
   private scriptNode: ScriptProcessorNode | null = null;
   private workletNode: AudioWorkletNode | null = null;
   private isWorkletActive = false;
@@ -80,6 +81,10 @@ export class SpeakerAudioEngine {
     this.analyserEngine = new AnalyserEngine(this.ctx, 2048);
     this.gainNode = this.ctx.createGain();
     this.gainNode.gain.value = this.userGain;
+
+    // Dedicated pristine record gain node — taps direct mic signal free of destructive gating artifacts
+    this.recordGainNode = this.ctx.createGain();
+    this.recordGainNode.gain.value = this.userGain;
 
     // Separate monitoring gain node for speaker playback (independent of recording level)
     this.monitorGainNode = this.ctx.createGain();
@@ -138,7 +143,13 @@ export class SpeakerAudioEngine {
     }
     this.sourceNode = this.ctx.createMediaStreamSource(this.stream);
 
-    // Audio Graph: sourceNode -> noiseEngine -> fxRack -> gainNode -> analyserEngine
+    // Pristine Recording Path: sourceNode -> recordGainNode -> worklet/processor
+    // Bypasses destructive gating while honoring user recording volume and mute
+    if (this.recordGainNode) {
+      this.sourceNode.connect(this.recordGainNode);
+    }
+
+    // Live Monitoring & FX Path: sourceNode -> noiseEngine -> fxRack -> gainNode -> analyserEngine
     if (this.noiseEngine) {
       this.sourceNode.connect(this.noiseEngine.inputNode);
     } else if (this.fxRack) {
@@ -375,7 +386,8 @@ export class SpeakerAudioEngine {
           }
         };
 
-        this.gainNode.connect(this.workletNode);
+        const captureSource = this.recordGainNode || this.gainNode;
+        captureSource.connect(this.workletNode);
         // Connect to silent sink so the browser audio graph pulls samples through worklet
         this.workletNode.connect(this.silentSink);
         return;
@@ -411,7 +423,8 @@ export class SpeakerAudioEngine {
       }
     };
 
-    this.gainNode.connect(this.scriptNode);
+    const captureSource = this.recordGainNode || this.gainNode;
+    captureSource.connect(this.scriptNode);
     this.scriptNode.connect(this.silentSink);
   }
 
@@ -445,8 +458,12 @@ export class SpeakerAudioEngine {
 
   public setGain(gainValue: number): void {
     this.userGain = Math.max(0, Math.min(2, gainValue));
-    if (this.gainNode && !this.isMuted) {
-      this.gainNode.gain.value = this.userGain;
+    const target = this.isMuted ? 0 : this.userGain;
+    if (this.gainNode) {
+      this.gainNode.gain.value = target;
+    }
+    if (this.recordGainNode) {
+      this.recordGainNode.gain.value = target;
     }
   }
 
@@ -461,19 +478,31 @@ export class SpeakerAudioEngine {
     }
     this.isRecording = true;
     this.isPaused = false;
+    if (this.workletNode) {
+      try { this.workletNode.port.postMessage({ isRecording: true }); } catch {}
+    }
   }
 
   public pauseRecording(): void {
     this.isPaused = true;
+    if (this.workletNode) {
+      try { this.workletNode.port.postMessage({ isRecording: false }); } catch {}
+    }
   }
 
   public resumeRecording(): void {
     this.isPaused = false;
+    if (this.workletNode) {
+      try { this.workletNode.port.postMessage({ isRecording: true }); } catch {}
+    }
   }
 
   public stopRecording(): AudioBuffer | null {
     this.isRecording = false;
     this.isPaused = false;
+    if (this.workletNode) {
+      try { this.workletNode.port.postMessage({ isRecording: false }); } catch {}
+    }
 
     if (this.totalSamples === 0 || !this.ctx) return null;
 
@@ -534,8 +563,8 @@ export class SpeakerAudioEngine {
   }
 
   public applyMuteState(): void {
+    const targetGain = this.isMuted ? 0 : this.userGain;
     if (this.gainNode) {
-      const targetGain = this.isMuted ? 0 : this.userGain;
       if (this.ctx) {
         try {
           this.gainNode.gain.cancelScheduledValues(this.ctx.currentTime);
@@ -545,6 +574,18 @@ export class SpeakerAudioEngine {
         }
       } else {
         this.gainNode.gain.value = targetGain;
+      }
+    }
+    if (this.recordGainNode) {
+      if (this.ctx) {
+        try {
+          this.recordGainNode.gain.cancelScheduledValues(this.ctx.currentTime);
+          this.recordGainNode.gain.setValueAtTime(targetGain, this.ctx.currentTime);
+        } catch {
+          this.recordGainNode.gain.value = targetGain;
+        }
+      } else {
+        this.recordGainNode.gain.value = targetGain;
       }
     }
     // NOTE: We now also toggle the MediaStream tracks to stop sending audio when muted.
